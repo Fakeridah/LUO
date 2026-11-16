@@ -1,0 +1,195 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2035002049474305246
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3014307550883917152}
+  - component: {fileID: 177956542071815650}
+  - component: {fileID: 5913919845083058001}
+  - component: {fileID: 3080026345297060562}
+  - component: {fileID: 7861991052977881814}
+  - component: {fileID: 7469650549123361251}
+  - component: {fileID: 6656392509874067624}
+  - component: {fileID: 2735037240310809734}
+  - component: {fileID: 5369181606605845465}
+  m_Layer: 0
+  m_Name: PickUpER
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3014307550883917152
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: -1
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &177956542071815650
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc1e56bdd2ac9c4a8a6c2fe414c2412, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  tooptipText: {fileID: 0}
+  cursorDefault: {fileID: 0}
+  cursorHand: {fileID: 0}
+  handGrabbed: {fileID: 0}
+  cursorFinger: {fileID: 0}
+  fingerGrabbed: {fileID: 0}
+--- !u!114 &5913919845083058001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7856e98586d648543b4a7f1ec2785089, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  cameraFPS: {fileID: 0}
+  player: {fileID: 0}
+  raycastMask:
+    serializedVersion: 2
+    m_Bits: 385
+  collisionMask:
+    serializedVersion: 2
+    m_Bits: 257
+  targetMask:
+  - Item
+  objTags:
+  - Item
+  - Collider
+  - Enemy
+  - Untagged
+  maxPickUpDistance: 1000
+  maxScaleDistance: 100
+  sample: 16
+  enableLerp: 1
+  lerpTime: 0.4
+  normalPickDistance: 5
+  target: {fileID: 0}
+  Recycle: 0
+--- !u!114 &3080026345297060562
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 19e53b416fec4b341a147adedee96946, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  OnEnableEvent:
+  - {fileID: 7861991052977881814}
+  OnDisableEvent:
+  - {fileID: 7469650549123361251}
+--- !u!114 &7861991052977881814
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 846d5f33f7af4014ea15adf7a92dc953, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Name: Toggle GameObject(s)
+  Targets:
+  - GameObject: {fileID: 0}
+    State: 1
+--- !u!114 &7469650549123361251
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 846d5f33f7af4014ea15adf7a92dc953, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Name: Toggle GameObject(s)
+  Targets:
+  - GameObject: {fileID: 0}
+    State: 0
+--- !u!114 &6656392509874067624
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c4bf164033b1e164fa81c42c9f16fa65, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  force: 50
+  regressForce: 1
+--- !u!114 &2735037240310809734
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5e8c20aa7bc4a6f4186b7e62e778f700, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Name: PickUp
+  Icon: {fileID: 21300000, guid: 5988a2020badc834c96521b52b6a08f5, type: 3}
+  NextRing: {fileID: 0}
+  trigger: 1
+  events:
+  - {fileID: 5369181606605845465}
+--- !u!114 &5369181606605845465
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2035002049474305246}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a20e6a67daa584f4b9dacfba0ce314fd, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Name: PickupAction
+  action: 3
+  ringMenu: {fileID: 0}
+  element: {fileID: 2735037240310809734}
+  dropAll: 0
+  destroyOBJ: {fileID: 0}
+  index: 0
+  elements: []
+  trigger: 1

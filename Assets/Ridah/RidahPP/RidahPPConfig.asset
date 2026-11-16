@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b6cb234adea7fdf41a4d1a1fd9e77c93, type: 3}
+  m_Name: RidahPPConfig
+  m_EditorClassIdentifier: 
+  afterSkybox:
+  - Ridah.URPPostProcessing.CloudShadowVolume
+  - Ridah.URPPostProcessing.OutlineVolume
+  beforePostProcess:
+  - Ridah.URPPostProcessing.BlurOptimized
+  - Ridah.URPPostProcessing.BloomAndFlare
+  - Ridah.URPPostProcessing.GlitchVolume
+  - Ridah.URPPostProcessing.HalfToneVolume
+  - Ridah.URPPostProcessing.WorldPositionVolume
+  - Ridah.URPPostProcessing.Fisheye
+  - Ridah.URPPostProcessing.GrayScale
+  - Ridah.URPPostProcessing.ScreenOverlay
+  - Ridah.URPPostProcessing.NoiseAndScratches
+  - Ridah.URPPostProcessing.SSAO
+  - Ridah.URPPostProcessing.Anti_Aliasing
+  - Ridah.URPPostProcessing.VignetteAndChromaticAberration
+  - Ridah.URPPostProcessing.EdgeDetection
+  - Ridah.URPPostProcessing.DepthOfFieldDeprecated
+  - Ridah.URPPostProcessing.SmokePP
+  - Ridah.URPPostProcessing.RidahFilmGrain
+  - Ridah.URPPostProcessing.AwakingEye
+  - Ridah.URPPostProcessing.GodRay
+  - Ridah.URPPostProcessing.RadialBlur
+  afterPostProcess: []

@@ -1,0 +1,226 @@
+Shader "Ridah/GodRay"
+{
+    Properties
+    {
+        _MainTex ("Texture", 2D) = "white" { }
+    }
+    
+    HLSLINCLUDE
+    #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
+    #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
+    #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+    #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+    #include "Packages/com.unity.render-pipelines.universal/Shaders/PostProcessing/Common.hlsl"
+
+    TEXTURE2D_X(_MainTex);
+    TEXTURE2D_X_FLOAT(_CameraDepthTexture);
+    SAMPLER(sampler_CameraDepthTexture);
+
+    TEXTURE2D_X(_LightShaftTempTex);
+
+    half4 _MainTex_ST;
+    float4 _MainTex_TexelSize;
+
+    half4 _Color;
+    float4 _CamWorldSpace;
+    float4x4 _CamFrustum, _CamToWorld;
+    int _MaxIterations;
+    float _MaxDistance;
+    float _MinDistance;
+    float _BlurScale;
+    float _DepthOutsideDecreaseValue;
+    float _DepthOutsideDecreaseSpeed;
+    //float _DepthOutsideDecreasePower;
+
+    float _Intensity;
+    
+    struct appdata
+    {
+	    uint vertexID : SV_VertexID;
+        float4 vertex : POSITION;
+        float2 uv : TEXCOORD0;
+    };
+    struct RayVaryings
+    {
+        float4 vertex : SV_POSITION;
+        float4 uv : TEXCOORD0;
+        float4 ray : TEXCOORD1;
+    };
+
+    RayVaryings Vert_Ray(appdata v)
+    {
+        RayVaryings output;
+        output.vertex = TransformObjectToHClip(v.vertex);
+        output.uv.xy = TRANSFORM_TEX(v.uv, _MainTex);
+        output.uv.zw = GetFullScreenTriangleTexCoord(v.vertexID);
+
+        int index = output.uv.x + 2 * output.uv.y;
+        output.ray = _CamFrustum[index];
+        
+        return output;
+    }
+
+    //这里之后可以用一张噪声贴图代替 节约性能
+    float GetRandomNumber(float2 texCoord, int Seed)
+    {
+        return frac(sin(dot(texCoord.xy, float2(12.9898, 78.233)) + Seed) * 43758.5453);
+    }
+    half shadowAtten(float3 worldpos){
+    return MainLightRealtimeShadow(TransformWorldToShadowCoord(worldpos));}
+    half4 SimpleRaymarching(float3 rayOrigin, float3 rayDirection, float depth)
+    {
+        half4 result = float4(_MainLightColor.xyz, 1) ;
+        
+        float step = _MaxDistance / _MaxIterations;
+        float t = _MinDistance + step * GetRandomNumber(rayDirection, _Time.y * 100);
+        float alpha = 0;
+
+        for (int i = 0; i < _MaxIterations; i++)
+        {
+            if (t > _MaxDistance || t >= depth)
+            {
+                break;
+            }
+            //当前点与物体的距离
+            float3 p = rayOrigin + rayDirection * t;
+            //阴影没有体积光
+            float4 shadowCoord = TransformWorldToShadowCoord(p);
+            float shadow = shadowAtten(p);
+            //float shadow = MainLightRealtimeShadow(shadowCoord);
+            if (shadow >= 1)
+            {
+                //【无阴影加入结果】
+                alpha += step * 0.2;
+            }
+            //【继续移动】
+            t += step;
+        }
+
+        result.a *= saturate(alpha);
+
+        return result;
+    }
+
+    half4 Frag(RayVaryings input) : SV_Target
+    {
+         float depth = SAMPLE_TEXTURE2D_X(_CameraDepthTexture, sampler_LinearClamp, input.uv).r;
+        depth = Linear01Depth(depth, _ZBufferParams);
+        if (depth > _DepthOutsideDecreaseValue / 100.0f)
+        {
+            depth = saturate(depth - (depth - _DepthOutsideDecreaseValue / 100.0f) * _DepthOutsideDecreaseSpeed);
+        }
+        depth *= length(input.ray);
+
+        float3 rayOrigin = _CamWorldSpace;
+        float3 rayDir = normalize(input.ray);
+        float4 result = SimpleRaymarching(rayOrigin, rayDir, depth);
+        
+        return result;
+    }
+
+    half4 Frag_Combine(RayVaryings input) : SV_Target
+    {
+        half4 color = SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, input.uv);
+        half4 shaft = SAMPLE_TEXTURE2D_X(_LightShaftTempTex, sampler_LinearClamp, input.uv)* _Intensity*_Color;
+        Light mainLight = GetMainLight();
+        half4 LightColorFix = lerp(float4(0.0, 0.0, 0.0, 0.0), float4(1.0, 1.0, 10, 1.0), saturate(mainLight.direction.y * 6 + 1));
+
+        color.rgb = lerp(color.rgb, shaft.rgb , shaft.a * LightColorFix.a);
+        
+        return color;
+    }
+
+    float4 Frag_Blur_Line(RayVaryings input) : SV_Target
+    {
+        float2 uv = input.uv;
+
+        half2 uv1 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(1, 0) * - 2.0;
+        half2 uv2 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(1, 0) * - 1.0;
+        half2 uv3 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(1, 0) * 0.0;
+        half2 uv4 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(1, 0) * 1.0;
+        half2 uv5 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(1, 0) * 2.0;
+        half4 s = 0;
+
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv1) * 0.0545;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv2) * 0.2442;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv3) * 0.4026;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv4) * 0.2442;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv5) * 0.0545;
+
+        return s;
+    }
+
+    float4 Frag_Blur_Colomn(RayVaryings input) : SV_Target
+    {
+        float2 uv = input.uv;
+
+        half2 uv1 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(0, 1) * - 2.0;
+        half2 uv2 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(0, 1) * - 1.0;
+        half2 uv3 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(0, 1) * 0.0;
+        half2 uv4 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(0, 1) * 1.0;
+        half2 uv5 = uv + half2(_BlurScale / _ScreenParams.x, _BlurScale / _ScreenParams.y) * half2(0, 1) * 2.0;
+        half4 s = 0;
+
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv1) * 0.0545;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv2) * 0.2442;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv3) * 0.4026;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv4) * 0.2442;
+        s += SAMPLE_TEXTURE2D_X(_MainTex, sampler_LinearClamp, uv5) * 0.0545;
+
+        return s;
+    }
+    ENDHLSL
+
+    SubShader
+    {
+        Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
+        LOD 100
+        ZTest Always ZWrite Off Cull Off
+
+        Pass
+        {
+            Name "GradientFog"
+
+            HLSLPROGRAM
+
+            #pragma vertex Vert_Ray
+            #pragma fragment Frag
+            ENDHLSL
+
+        }
+        
+        Pass
+        {
+            Name "Combine"
+            
+            HLSLPROGRAM
+
+            #pragma vertex Vert_Ray
+            #pragma fragment Frag_Combine
+            ENDHLSL
+
+        }
+        Pass
+        {
+            Name "Blur_Line"
+            
+            HLSLPROGRAM
+
+            #pragma vertex Vert_Ray
+            #pragma fragment Frag_Blur_Line
+            ENDHLSL
+
+        }
+        Pass
+        {
+            Name "Blur_Colomn"
+            
+            HLSLPROGRAM
+
+            #pragma vertex Vert_Ray
+            #pragma fragment Frag_Blur_Colomn
+            ENDHLSL
+
+        }
+    }
+}
