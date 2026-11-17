@@ -30,6 +30,10 @@ namespace RidahFPS.Controllers
         public float clientMaxSpeed;
         public float maxVelocity;
         public float walkableNormal;
+        // Source sv_bounce. GOKZ's momsurrfix uses this only for the first
+        // steep collision plane while the player is grounded. CS:GO's
+        // default is 0, so the default KZTimer profile has no extra bounce.
+        public float bounce;
         public float waterAccelerate;
         public float waterMoveSpeedMultiplier;
         public bool enableBunnyhopping;
@@ -70,6 +74,7 @@ namespace RidahFPS.Controllers
                         clientMaxSpeed = 320f,
                         maxVelocity = 3500f,
                         walkableNormal = 0.7f,
+                        bounce = 0f,
                         waterAccelerate = 10f,
                         waterMoveSpeedMultiplier = 0.8f,
                         enableBunnyhopping = false,
@@ -103,6 +108,7 @@ namespace RidahFPS.Controllers
                         clientMaxSpeed = 320f,
                         maxVelocity = 3500f,
                         walkableNormal = 0.7f,
+                        bounce = 0f,
                         waterAccelerate = 10f,
                         waterMoveSpeedMultiplier = 0.8f,
                         enableBunnyhopping = true,
@@ -138,6 +144,7 @@ namespace RidahFPS.Controllers
                         clientMaxSpeed = 320f,
                         maxVelocity = 2000f,
                         walkableNormal = 0.7f,
+                        bounce = 0f,
                         waterAccelerate = 10f,
                         waterMoveSpeedMultiplier = 0.8f,
                         enableBunnyhopping = true,

@@ -37,7 +37,7 @@ namespace RidahFPS.Controllers
                 Adapter("CGameMovement::StartGravity/FinishGravity", "SourceMovementCore", "half-step gravity around movement"),
                 Adapter("CGameMovement::CheckJumpButton/OnJump", "SourceMovementCore", "edge-triggered jump, HitPerf state and post-jump cap"),
                 Adapter("CGameMovement::Friction/WalkMove/AirMove/AirAccelerate", "SourceMovementCore + GokzMovementRules", "Source formulas in Hammer units, converted only at the Unity boundary"),
-                Adapter("CGameMovement::TryPlayerMove/StepMove/StayOnGround", "SourceMovementCore", "axis-aligned box sweep, five-plane clip solver and step solver"),
+                Adapter("CGameMovement::TryPlayerMove/StepMove/StayOnGround + gokz-momsurffix", "SourceMovementCore", "axis-aligned box sweep, five-plane clip solver, Source sv_bounce overbounce and step solver"),
                 Adapter("CGameMovement::CategorizePosition/CheckVelocity", "SourceMovementCore", "walkable-normal ground trace and component velocity bounds"),
                 Adapter("CGameMovement::Duck/CanUnduck", "SourceMovementCore + SurfCharacter", "54/72 HU hulls, Source eye offsets and landing-tick unduck rule"),
                 Adapter("CGameMovement::LadderMove/FullLadderMove", "SourceMovementCore", "ladder-normal projection, 200 HU climb and 270 HU jump-away"),

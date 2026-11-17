@@ -423,6 +423,39 @@ namespace RidahFPS.Controllers.Tests
         }
 
         [Test]
+        public void EmbeddedHullIsRecoveredOnTheNextSourceCommand()
+        {
+            _surfer.MoveData.verticalAxis = 0f;
+            _surfer.MoveData.horizontalAxis = 0f;
+            _surfer.MoveData.moveForward = false;
+            _surfer.MoveData.moveBack = false;
+            _surfer.MoveData.moveLeft = false;
+            _surfer.MoveData.moveRight = false;
+
+            _extraObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            _extraObject.name = "GokzEmbeddedHullBlock";
+            _extraObject.transform.position = new Vector3(0.2f, 0.7f, 0f);
+            _extraObject.transform.localScale = new Vector3(0.5f, 1.4f, 2f);
+            Physics.SyncTransforms();
+
+            // The first command must use Source's stuck recovery offsets
+            // immediately. A one-second recovery throttle would leave the
+            // player with zero velocity and airborne for many ticks.
+            Tick();
+            Assert.That(
+                _playerObject.transform.position.x,
+                Is.LessThan(-0.05f).Or.GreaterThan(0.45f),
+                $"position={_playerObject.transform.position}, " +
+                $"velocity={_surfer.MoveData.Velocity}, " +
+                $"grounded={_core.Grounded}");
+            Assert.That(
+                _core.Grounded,
+                Is.True,
+                $"position={_playerObject.transform.position}, " +
+                $"velocity={_surfer.MoveData.Velocity}");
+        }
+
+        [Test]
         public void ReverseGravityCategorizesTheCeilingAsGround()
         {
             _extraObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -574,7 +607,54 @@ namespace RidahFPS.Controllers.Tests
         }
 
         [Test]
-        public void UpwardPushVolumeDetachesGroundEntityLikeSource()
+        public void HorizontalPushBecomesPlayerMomentumAfterLeavingTrigger()
+        {
+            _surfer.MoveData.verticalAxis = 0f;
+            _surfer.MoveData.horizontalAxis = 0f;
+            _surfer.MoveData.moveForward = false;
+            _surfer.MoveData.moveBack = false;
+            _surfer.MoveData.moveLeft = false;
+            _surfer.MoveData.moveRight = false;
+
+            _extraObject = new GameObject("GokzPushMomentumTest");
+            _extraObject.transform.position = new Vector3(0.1f, 3f, 0f);
+            BoxCollider pushCollider = _extraObject.AddComponent<BoxCollider>();
+            pushCollider.size = new Vector3(0.4f, 10f, 10f);
+            pushCollider.isTrigger = true;
+            GokzMovementVolume pushVolume =
+                _extraObject.AddComponent<GokzMovementVolume>();
+
+            SerializedObject serialized = new SerializedObject(pushVolume);
+            serialized.FindProperty("movementType").enumValueIndex =
+                (int)GokzMovementVolumeType.Push;
+            serialized.FindProperty("localPushDirection").vector3Value =
+                Vector3.right;
+            serialized.FindProperty("pushSpeedHU").floatValue = 400f;
+            serialized.FindProperty("pushOnce").boolValue = false;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            Physics.SyncTransforms();
+
+            bool leftTrigger = false;
+            for (int tick = 0; tick < 64 && !leftTrigger; tick++)
+            {
+                Tick();
+                leftTrigger = _playerObject.transform.position.x > 0.7f;
+            }
+
+            // The player has just left the narrow trigger. Source's next
+            // command transfers the remaining BaseVelocity into real player
+            // velocity; a trigger-only implementation leaves this at zero.
+            Assert.That(leftTrigger, Is.True);
+            Assert.That(
+                HorizontalSpeedHu(),
+                Is.GreaterThan(200f),
+                $"x={_playerObject.transform.position.x}, " +
+                $"velocity={_surfer.MoveData.Velocity}, " +
+                $"sourceBase={_core.SourceTriggerBaseVelocity}");
+        }
+
+        [Test]
+        public void UpwardPushOnceVolumeDetachesGroundEntityLikeSource()
         {
             _surfer.MoveData.verticalAxis = 0f;
             _surfer.MoveData.horizontalAxis = 0f;
@@ -597,10 +677,12 @@ namespace RidahFPS.Controllers.Tests
                 (int)GokzMovementVolumeType.Push;
             serialized.FindProperty("localPushDirection").vector3Value =
                 Vector3.up;
-            // Source trigger_push values used as jump pads are normally much
-            // larger than the entity's 100 HU/s default. The vertical base
-            // velocity is multiplied by frametime in StartGravity.
-            serialized.FindProperty("pushSpeedHU").floatValue = 10000f;
+            // Source's SF_TRIG_PUSH_ONCE branch calls
+            // ApplyAbsVelocityImpulse directly. This is the jump-pad case;
+            // the ordinary branch is covered by the horizontal BaseVelocity
+            // test above.
+            serialized.FindProperty("pushSpeedHU").floatValue = 400f;
+            serialized.FindProperty("pushOnce").boolValue = true;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             Physics.SyncTransforms();
 
@@ -610,7 +692,10 @@ namespace RidahFPS.Controllers.Tests
 
             Assert.That(
                 _playerObject.transform.position.y,
-                Is.GreaterThan(startY + 0.1f));
+                Is.GreaterThan(startY + 0.1f),
+                $"startY={startY}, finalY={_playerObject.transform.position.y}, " +
+                $"velocity={_surfer.MoveData.Velocity}, grounded={_core.Grounded}, " +
+                $"sourceBase={_core.SourceTriggerBaseVelocity}");
         }
 
         private void Tick()

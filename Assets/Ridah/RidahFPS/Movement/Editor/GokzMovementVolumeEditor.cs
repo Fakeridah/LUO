@@ -91,6 +91,13 @@ namespace RidahFPS.Controllers
                     EditorGUILayout.PropertyField(_localPushDirection, new GUIContent("Local Direction"));
                     EditorGUILayout.PropertyField(_pushSpeedHU, new GUIContent("Push Speed (HU/s)"));
                     EditorGUILayout.PropertyField(_pushOnce, new GUIContent("Push Once"));
+                    if (!_pushOnce.boolValue &&
+                        Mathf.Abs(_localPushDirection.vector3Value.y) > 0.0001f)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "普通 Source trigger_push 持续写入 BaseVelocity，不是一次性跳台冲量。向上跳台请启用 Push Once；当前模式只有在产生足够的向上速度时才会脱离地面。",
+                            MessageType.Info);
+                    }
                     break;
             }
 

@@ -47,6 +47,7 @@ namespace RidahFPS.Controllers
         private float ClientMaxSpeed => _settings.clientMaxSpeed * UnitScale;
         private float MaxVelocity => _settings.maxVelocity * UnitScale;
         private float WalkableNormal => _settings.walkableNormal;
+        private float Bounce => _settings.bounce;
         private float WaterAccelerate => _settings.waterAccelerate;
         private float WaterMoveSpeedMultiplier => _settings.waterMoveSpeedMultiplier;
 
@@ -58,7 +59,6 @@ namespace RidahFPS.Controllers
         private const float SourceStepEpsilon = 0.03125f * UnitScale;
         private const float CollisionSkin = 0.001f;
         private const float SourceMinimumMoveFraction = 0.0001f;
-        private const float SourceCheckStuckInterval = 1f;
         private const float SourceStaminaRange = 100f;
 
         // CS:GO's continuous duck state. GOKZ does not replace Source's duck
@@ -159,7 +159,6 @@ namespace RidahFPS.Controllers
         private bool _waterJumpProcessedThisTick;
         private float _lastGroundSurfaceMaxSpeedFactor = 1f;
         private int _stuckOffsetIndex;
-        private float _nextStuckCheckTime;
         private bool _movementBlockedThisTick;
         private float _simpleBonusSpeed;
         private float _simpleTurnRate;
@@ -192,7 +191,7 @@ namespace RidahFPS.Controllers
         private bool _collisionReady;
         private float _sourceGravityScale = 1f;
         private Vector3 _sourceTriggerBaseVelocity;
-        private bool _sourcePushDetachedThisTick;
+        private bool _sourceTriggerBaseVelocityFlag;
         private bool _originalCharacterControllerEnabled;
         private bool _originalRigidbodyKinematic;
         private bool _originalRigidbodyUseGravity;
@@ -504,7 +503,21 @@ namespace RidahFPS.Controllers
                 Vector3 candidateVelocity = Vector3.zero;
                 for (int i = 0; i < numPlanes; i++)
                 {
-                    candidateVelocity = ClipVelocity(originalVelocity, planes[i], 1f);
+                    float overbounce = 1f;
+                    if (numPlanes == 1 && Grounded &&
+                        Vector3.Dot(planes[i], _movementUp) < WalkableNormal)
+                    {
+                        // gokz-momsurffix applies Source's sv_bounce only
+                        // to the first steep plane while the player still has
+                        // a ground entity. Walkable ground keeps overbounce 1.
+                        float surfaceFriction = Mathf.Clamp01(
+                            _surfer.MoveData.SurfaceFriction);
+                        overbounce += Bounce * (1f - surfaceFriction);
+                    }
+                    candidateVelocity = ClipVelocity(
+                        originalVelocity,
+                        planes[i],
+                        overbounce);
                     bool valid = true;
                     for (int j = 0; j < numPlanes; j++)
                     {
@@ -726,17 +739,23 @@ namespace RidahFPS.Controllers
             if (_surfer.MoveData.wishJump || _surfer.MoveData.jumpHeld)
                 _lastJumpRequestTick = _movementTick;
             LastJumpWasPerfect = false;
-            _sourcePushDetachedThisTick = false;
 
             // The project can temporarily reverse gravity or disable it in a
             // trigger. The normal state remains the exact GOKZ +Z-up path.
             _movementUp = _surfer.MoveData.reverseGravity < 0f ? Vector3.down : Vector3.up;
 
+            // CPlayerMove::CheckMovingGround runs before ProcessMovement. A
+            // trigger_push leaves FL_BASEVELOCITY set for the next command;
+            // when the flag is no longer set, Source transfers the remaining
+            // base velocity into the player's real velocity and clears it.
+            // Keeping this state across ticks is what makes a horizontal push
+            // carry out of the trigger instead of existing only inside it.
+            ConsumeSourceTriggerBaseVelocity();
+
             // Sample the ground entity before recategorizing. This is the
             // Unity equivalent of Source reading GetAbsVelocity() from the
             // entity attached during the previous command.
             bool groundAtTickStart = Grounded;
-            UpdateSourceMovementVolumes(groundAtTickStart);
             Vector3 groundVelocityAtTickStart = groundAtTickStart
                 ? GetGroundEntityVelocity(_groundHit)
                 : Vector3.zero;
@@ -759,8 +778,6 @@ namespace RidahFPS.Controllers
                 _movementVelocity = Vector3.zero;
                 _surfer.MoveData.Velocity = Vector3.zero;
                 Grounded = CategorizePosition(out _groundHit);
-                if (_sourcePushDetachedThisTick)
-                    Grounded = false;
                 _groundNormal = Grounded ? _groundHit.normal : _movementUp;
                 _startGrounded = groundAtTickStart;
                 _landedThisTick = false;
@@ -789,8 +806,6 @@ namespace RidahFPS.Controllers
                 return;
             }
             Grounded = CategorizePosition(out _groundHit);
-            if (_sourcePushDetachedThisTick)
-                Grounded = false;
             _groundNormal = Grounded ? _groundHit.normal : _movementUp;
             _surfer.MoveData.SurfaceFriction = Grounded
                 ? GetSurfaceFriction(_groundHit)
@@ -929,8 +944,6 @@ namespace RidahFPS.Controllers
             Physics.SyncTransforms();
             RaycastHit finalGroundHit;
             bool finalGrounded = CategorizePosition(out finalGroundHit);
-            if (_sourcePushDetachedThisTick)
-                finalGrounded = false;
             bool landed = !_startGrounded && finalGrounded;
             if (landed)
             {
@@ -942,15 +955,20 @@ namespace RidahFPS.Controllers
                     0f,
                     -Vector3.Dot(incomingVelocity, _movementUp) *
                         HammerUnitsPerUnityUnit));
-                Vector3 horizontalVelocity = Vector3.ProjectOnPlane(
-                    incomingVelocity,
-                    _movementUp);
+                // GOKZ's SlopeFix passes the complete landing velocity to
+                // ClipVelocity. The downward component is what is converted
+                // into downhill horizontal speed; projecting it out first
+                // silently removes the actual slope boost.
+                Vector3 landingVelocity = incomingVelocity;
                 ApplySlopeFix(
-                    ref horizontalVelocity,
+                    ref landingVelocity,
                     _surfer.MoveData.playerTransform.position,
                     landed);
+                Vector3 horizontalVelocity = Vector3.ProjectOnPlane(
+                    landingVelocity,
+                    _movementUp);
                 _surfer.MoveData.Velocity = horizontalVelocity +
-                    _movementUp * Vector3.Dot(incomingVelocity, _movementUp);
+                    _movementUp * Vector3.Dot(landingVelocity, _movementUp);
                 _landingVelocity = horizontalVelocity;
                 _landingPreVelMod = _preVelMod;
             }
@@ -984,6 +1002,14 @@ namespace RidahFPS.Controllers
             // no accumulating downward velocity.
             if (Grounded && !_onLadderThisTick)
                 RemoveVerticalVelocity(ref _surfer.MoveData.Velocity);
+
+            // Source calls CMoveHelperServer::ProcessImpacts after
+            // ProcessMovement has finished. trigger_push therefore writes
+            // BaseVelocity (or applies its one-shot impulse) for the next
+            // movement command; it is not a pre-movement water/gravity
+            // modifier. Keep this post-move ordering so an upward push can
+            // detach a grounded player and the next tick can jump normally.
+            UpdateSourceMovementVolumes(Grounded);
 
             _surfer.MoveData.grounded = Grounded;
             _surfer.MoveData.groundTransform = Grounded ? _groundHit.transform : null;
@@ -1045,7 +1071,6 @@ namespace RidahFPS.Controllers
             _waterJumpProcessedThisTick = false;
             _lastGroundSurfaceMaxSpeedFactor = 1f;
             _stuckOffsetIndex = 0;
-            _nextStuckCheckTime = 0f;
             _movementBlockedThisTick = false;
             _simpleBonusSpeed = 0f;
             _simpleTurnRate = 0f;
@@ -1077,7 +1102,7 @@ namespace RidahFPS.Controllers
             _baseVelocity = Vector3.zero;
             _sourceGravityScale = 1f;
             _sourceTriggerBaseVelocity = Vector3.zero;
-            _sourcePushDetachedThisTick = false;
+            _sourceTriggerBaseVelocityFlag = false;
             _sourceVolumesThisTick.Clear();
             _consumedSourcePushVolumes.Clear();
             _sampledGroundTransform = null;
@@ -1114,6 +1139,28 @@ namespace RidahFPS.Controllers
         {
             float gravity = GetGravityAcceleration();
             _surfer.MoveData.Velocity -= _movementUp * gravity * TickInterval * 0.5f;
+        }
+
+        private void ConsumeSourceTriggerBaseVelocity()
+        {
+            if (_sourceTriggerBaseVelocityFlag)
+            {
+                // Source removes FL_BASEVELOCITY at the beginning of the
+                // command, but keeps the vector available to movement. A
+                // touching trigger will replace it after this command.
+                _sourceTriggerBaseVelocityFlag = false;
+                return;
+            }
+
+            if (_sourceTriggerBaseVelocity.sqrMagnitude <= 0.00000001f)
+                return;
+
+            // CPlayerMove::CheckMovingGround applies momentum one command
+            // after the base-velocity flag disappears, including Source's
+            // small half-frame factor, then clears the base velocity.
+            _surfer.MoveData.Velocity += _sourceTriggerBaseVelocity *
+                (1f + TickInterval * 0.5f);
+            _sourceTriggerBaseVelocity = Vector3.zero;
         }
 
         private void ReduceMovementTimers()
@@ -1929,10 +1976,42 @@ namespace RidahFPS.Controllers
                     collider.transform.IsChildOf(
                         _surfer.MoveData.playerTransform))
                     continue;
-                return true;
+
+                // Physics.OverlapBox also reports a collider that merely
+                // touches the query box (including Unity's contact offset).
+                // Source's allsolid/CheckStuck path is only for a hull that
+                // is actually penetrating solid geometry. Treating ordinary
+                // wall contact as stuck zeroes the clipped velocity every
+                // command, so the player can only escape by changing hull
+                // size (duck) or teleporting (reset).
+                if (Physics.ComputePenetration(
+                    _sourceHullCollider,
+                    basePosition,
+                    Quaternion.identity,
+                    collider,
+                    collider.transform.position,
+                    collider.transform.rotation,
+                    out _,
+                    out float penetration) &&
+                     penetration > GetContactPenetrationTolerance(collider))
+                    return true;
             }
 
             return false;
+        }
+
+        private float GetContactPenetrationTolerance(Collider other)
+        {
+            if (other == null)
+                return CollisionSkin;
+
+            float hullContactOffset = _sourceHullCollider != null
+                ? _sourceHullCollider.contactOffset
+                : 0f;
+            return Mathf.Max(
+                CollisionSkin,
+                Mathf.Max(hullContactOffset, other.contactOffset)) +
+                CollisionSkin;
         }
 
         private void TryWaterCrouchBoost()
@@ -2265,10 +2344,9 @@ namespace RidahFPS.Controllers
             return baseVelocity + groundBody.GetPointVelocity(playerTransform.position);
         }
 
-        private void UpdateSourceMovementVolumes(bool groundAtTickStart)
+        private void UpdateSourceMovementVolumes(bool groundedAtTriggerTouch)
         {
             _sourceGravityScale = 1f;
-            _sourceTriggerBaseVelocity = Vector3.zero;
             _sourceVolumesThisTick.Clear();
 
             if (_surfer == null || _surfer.MoveData.playerTransform == null)
@@ -2286,6 +2364,7 @@ namespace RidahFPS.Controllers
                 QueryTriggerInteraction.Collide);
 
             GokzMovementVolume selectedGravity = null;
+            bool normalPushTouched = false;
 
             for (int i = 0; i < count; i++)
             {
@@ -2329,18 +2408,28 @@ namespace RidahFPS.Controllers
                     _surfer.MoveData.Velocity += pushVelocity;
                     DetachFromGroundForPush(
                         pushVelocity,
-                        groundAtTickStart);
+                        groundedAtTriggerTouch);
                 }
                 else
                 {
-                    // CTriggerPush adds its velocity to the player's base
-                    // velocity every touch. Summing overlapping pushes keeps
-                    // that Source behavior and leaves the result to the
-                    // normal StartGravity/Move/Finish consumption path.
-                    _sourceTriggerBaseVelocity += pushVelocity;
+                    // CTriggerPush writes BaseVelocity after movement. A
+                    // second push touched during the same impact pass sees
+                    // the first one and adds to it; a push on the next
+                    // command replaces the previous vector, just like the
+                    // Source entity code.
+                    if (!normalPushTouched)
+                    {
+                        _sourceTriggerBaseVelocity = pushVelocity;
+                        normalPushTouched = true;
+                    }
+                    else
+                    {
+                        _sourceTriggerBaseVelocity += pushVelocity;
+                    }
+                    _sourceTriggerBaseVelocityFlag = true;
                     DetachFromGroundForPush(
                         pushVelocity,
-                        groundAtTickStart);
+                        groundedAtTriggerTouch);
                 }
             }
 
@@ -2350,13 +2439,12 @@ namespace RidahFPS.Controllers
 
         private void DetachFromGroundForPush(
             Vector3 pushVelocity,
-            bool groundAtTickStart)
+            bool groundedAtTriggerTouch)
         {
             if (Vector3.Dot(pushVelocity, _movementUp) <= 0f)
                 return;
 
-            _sourcePushDetachedThisTick = true;
-            if (!groundAtTickStart)
+            if (!groundedAtTriggerTouch)
                 return;
 
             Grounded = false;
@@ -2489,13 +2577,15 @@ namespace RidahFPS.Controllers
             if (_sourceHullCollider == null || playerTransform == null)
                 return;
 
-            Vector3 halfExtents = GetQueryHalfExtents(GetBoxHalfExtents(_isCrouched));
+            Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
+            Vector3 queryHalfExtents = GetQueryHalfExtents(halfExtents);
             for (int iteration = 0; iteration < 4; iteration++)
             {
-                Vector3 center = playerTransform.position + _movementUp * GetBoxHalfExtents(_isCrouched).y;
+                Vector3 center = playerTransform.position +
+                    _movementUp * halfExtents.y;
                 int count = Physics.OverlapBoxNonAlloc(
                     center,
-                    halfExtents,
+                    queryHalfExtents,
                     _hullOverlaps,
                     Quaternion.identity,
                     GetCollisionMask(),
@@ -2520,7 +2610,12 @@ namespace RidahFPS.Controllers
                         out float distance))
                         continue;
 
-                    if (distance <= CollisionSkin)
+                    // Unity reports a small ComputePenetration distance for
+                    // ordinary contact because colliders have a contact
+                    // offset. Source's CheckStuck is for startsolid/allsolid,
+                    // not for that contact margin. Only resolve penetration
+                    // deeper than the combined Unity contact tolerance.
+                    if (distance <= GetContactPenetrationTolerance(other))
                         continue;
 
                     playerTransform.position += direction * (distance + CollisionSkin);
@@ -2536,11 +2631,9 @@ namespace RidahFPS.Controllers
         private bool TrySourceStuckRecovery()
         {
             if (!_collisionReady || _sourceHullCollider == null ||
-                _surfer == null || _surfer.MoveData.playerTransform == null ||
-                _elapsed < _nextStuckCheckTime)
+                _surfer == null || _surfer.MoveData.playerTransform == null)
                 return false;
 
-            _nextStuckCheckTime = _elapsed + SourceCheckStuckInterval;
             Transform playerTransform = _surfer.MoveData.playerTransform;
             Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
             if (!IsHullStuckAt(playerTransform.position, halfExtents))
@@ -2709,7 +2802,7 @@ namespace RidahFPS.Controllers
         }
 
         private void ApplySlopeFix(
-            ref Vector3 horizontalVelocity,
+            ref Vector3 landingVelocity,
             Vector3 landingOrigin,
             bool landed)
         {
@@ -2738,12 +2831,15 @@ namespace RidahFPS.Controllers
             if (groundUpDot < WalkableNormal || groundUpDot >= 0.999999f)
                 return;
 
+            Vector3 originalHorizontalVelocity = Vector3.ProjectOnPlane(
+                landingVelocity,
+                _movementUp);
             Vector3 clipped = ClipLandingVelocity(
-                horizontalVelocity,
+                landingVelocity,
                 slopeHit.normal,
                 _movementUp);
-            if (clipped.magnitude > horizontalVelocity.magnitude)
-                horizontalVelocity = clipped;
+            if (clipped.magnitude > originalHorizontalVelocity.magnitude)
+                landingVelocity = clipped;
         }
 
         private static Vector3 ClipLandingVelocity(Vector3 velocity, Vector3 normal, Vector3 up)
