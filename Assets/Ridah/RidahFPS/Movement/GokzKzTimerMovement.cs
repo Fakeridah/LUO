@@ -313,7 +313,6 @@ namespace RidahFPS.Controllers
             if (!_collisionReady || surfer.MoveData.playerTransform == null)
                 return;
 
-            ResolveInitialPenetration(surfer.MoveData.playerTransform);
             Vector3 startPosition = surfer.MoveData.playerTransform.position;
             // MoveData.Velocity is authoritative. The cached velocity is a
             // diagnostic value and must not swallow a velocity written by a
@@ -446,7 +445,7 @@ namespace RidahFPS.Controllers
                 Vector3 direction = velocity / velocity.magnitude;
                 int hitCount = SweepBox(position, halfExtents, direction, distance);
                 RaycastHit nearest;
-                if (!TryGetNearestHit(hitCount, out nearest))
+                if (!TryGetNearestBlockingHit(hitCount, direction, out nearest))
                 {
                     position += velocity * timeLeft;
                     allFraction += 1f;
@@ -473,7 +472,7 @@ namespace RidahFPS.Controllers
                 }
 
                 allFraction += fraction;
-                Vector3 planeNormal = nearest.normal.normalized;
+                Vector3 planeNormal = GetSourcePlaneNormal(nearest, direction);
                 if (Mathf.Abs(Vector3.Dot(planeNormal, _movementUp)) <
                     0.0001f)
                 {
@@ -655,7 +654,9 @@ namespace RidahFPS.Controllers
             // so a missing lower hit must restore the ordinary path instead
             // of leaving the player in the air at the full step distance.
             if (!TryGetNearestHit(downHitCount, out downHit) ||
-                Vector3.Dot(downHit.normal, _movementUp) < WalkableNormal)
+                Vector3.Dot(
+                    GetSourcePlaneNormal(downHit, -_movementUp),
+                    _movementUp) < WalkableNormal)
                 return false;
 
             float safeDownDistance = Mathf.Clamp(
@@ -727,6 +728,180 @@ namespace RidahFPS.Controllers
             return found;
         }
 
+        private bool TryGetNearestBlockingHit(
+            int hitCount,
+            Vector3 movementDirection,
+            out RaycastHit nearest)
+        {
+            nearest = default;
+            float nearestDistance = float.PositiveInfinity;
+            bool found = false;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit candidate = _moveHits[i];
+                if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
+                    (_surfer != null && _surfer.MoveData.playerTransform != null &&
+                     candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform)))
+                    continue;
+
+                // Source's trace starts at the current hull boundary. A
+                // Unity BoxCast can report that boundary as a zero-distance
+                // hit because of contact offsets even when the command is
+                // tangent to, or moving away from, the surface. Such a hit is
+                // not a new blocking plane. A command entering the plane is
+                // still retained, including a real ceiling hit while jumping.
+                Vector3 sourceNormal = GetSourcePlaneNormal(
+                    candidate,
+                    movementDirection);
+                if (candidate.distance <= CollisionSkin &&
+                    Vector3.Dot(movementDirection, sourceNormal) >= -0.0001f)
+                    continue;
+
+                if (candidate.distance < nearestDistance)
+                {
+                    nearest = candidate;
+                    nearestDistance = candidate.distance;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
+        private static Vector3 GetSourcePlaneNormal(
+            RaycastHit hit,
+            Vector3 movementDirection)
+        {
+            Vector3 normal = hit.normal.normalized;
+            BoxCollider box = hit.collider as BoxCollider;
+            if (box == null || !box.enabled)
+                return normal;
+
+            // Unity returns Vector3.zero as the contact point for this
+            // zero-distance BoxCast result when the query begins inside the
+            // collider's contact margin. In that case the point cannot be
+            // used to identify the touched face. Recover the nearest box face
+            // from the reported normal in collider-local axes instead.
+            if (hit.point == Vector3.zero &&
+                box.transform.position.sqrMagnitude > 0.000001f)
+                return GetMostBlockingBoxFaceNormal(
+                    box.transform,
+                    normal,
+                    movementDirection);
+
+            // Source traces return the actual brush plane at a box edge.
+            // Unity BoxCast may blend adjacent BoxCollider face normals at
+            // that same edge (for example wall + floor), which invents an
+            // upward component and changes Source's plane clipping. Recover
+            // the nearest box face(s), then select the face the command is
+            // entering. On a true edge this is the most blocking of its
+            // adjoining planes, as a swept brush trace would report.
+            Vector3 localPoint = box.transform.InverseTransformPoint(hit.point) -
+                box.center;
+            Vector3 halfSize = box.size * 0.5f;
+            float faceX = Mathf.Abs(Mathf.Abs(localPoint.x) - halfSize.x);
+            float faceY = Mathf.Abs(Mathf.Abs(localPoint.y) - halfSize.y);
+            float faceZ = Mathf.Abs(Mathf.Abs(localPoint.z) - halfSize.z);
+            float nearestFace = Mathf.Min(faceX, Mathf.Min(faceY, faceZ));
+            const float faceTieTolerance = 0.001f;
+
+            Matrix4x4 normalMatrix = box.transform.localToWorldMatrix.inverse.transpose;
+            float bestDot = Vector3.Dot(movementDirection, normal);
+            Vector3 bestNormal = normal;
+
+            if (faceX <= nearestFace + faceTieTolerance)
+            {
+                Vector3 localNormal = new Vector3(
+                    localPoint.x < 0f ? -1f : 1f,
+                    0f,
+                    0f);
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(localNormal),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+            }
+
+            if (faceY <= nearestFace + faceTieTolerance)
+            {
+                Vector3 localNormal = new Vector3(
+                    0f,
+                    localPoint.y < 0f ? -1f : 1f,
+                    0f);
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(localNormal),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+            }
+
+            if (faceZ <= nearestFace + faceTieTolerance)
+            {
+                Vector3 localNormal = new Vector3(
+                    0f,
+                    0f,
+                    localPoint.z < 0f ? -1f : 1f);
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(localNormal),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+            }
+
+            return bestNormal.normalized;
+        }
+
+        private static Vector3 GetMostBlockingBoxFaceNormal(
+            Transform boxTransform,
+            Vector3 reportedNormal,
+            Vector3 movementDirection)
+        {
+            Vector3 localNormal = boxTransform.InverseTransformDirection(
+                reportedNormal).normalized;
+            Matrix4x4 normalMatrix =
+                boxTransform.localToWorldMatrix.inverse.transpose;
+            float bestDot = Vector3.Dot(movementDirection, reportedNormal);
+            Vector3 bestNormal = reportedNormal.normalized;
+
+            if (Mathf.Abs(localNormal.x) > 0.0001f)
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(
+                        new Vector3(Mathf.Sign(localNormal.x), 0f, 0f)),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+            if (Mathf.Abs(localNormal.y) > 0.0001f)
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(
+                        new Vector3(0f, Mathf.Sign(localNormal.y), 0f)),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+            if (Mathf.Abs(localNormal.z) > 0.0001f)
+                SelectMoreBlockingBoxFace(
+                    normalMatrix.MultiplyVector(
+                        new Vector3(0f, 0f, Mathf.Sign(localNormal.z))),
+                    movementDirection,
+                    ref bestDot,
+                    ref bestNormal);
+
+            return bestNormal.normalized;
+        }
+
+        private static void SelectMoreBlockingBoxFace(
+            Vector3 candidateNormal,
+            Vector3 movementDirection,
+            ref float bestDot,
+            ref Vector3 bestNormal)
+        {
+            candidateNormal.Normalize();
+            float candidateDot = Vector3.Dot(movementDirection, candidateNormal);
+            if (candidateDot < bestDot)
+            {
+                bestDot = candidateDot;
+                bestNormal = candidateNormal;
+            }
+        }
+
         public void Process(ISurfControllable surfer)
         {
             _surfer = surfer;
@@ -766,7 +941,6 @@ namespace RidahFPS.Controllers
             // categorizing the next tick's ground state.
             ConfigureSourceHullTransform(_surfer.MoveData.playerTransform);
             Physics.SyncTransforms();
-            ResolveInitialPenetration(_surfer.MoveData.playerTransform);
             _movementBlockedThisTick = false;
             if (TrySourceStuckRecovery())
             {
@@ -1385,10 +1559,15 @@ namespace RidahFPS.Controllers
                      _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(
                          _surfer.MoveData.playerTransform)) ||
-                    Vector3.Dot(candidate.normal, _movementUp) < WalkableNormal ||
+                    Vector3.Dot(
+                        GetSourcePlaneNormal(candidate, -_movementUp),
+                        _movementUp) < WalkableNormal ||
                     candidate.distance >= nearestDistance)
                     continue;
 
+                candidate.normal = GetSourcePlaneNormal(
+                    candidate,
+                    -_movementUp);
                 nearest = candidate;
                 nearestDistance = candidate.distance;
                 found = true;
@@ -1933,9 +2112,14 @@ namespace RidahFPS.Controllers
 
         private bool CanFitHullAt(Vector3 basePosition, float height)
         {
-            Vector3 center = basePosition +
-                _movementUp * (height * 0.5f + 0.01f);
-            Vector3 halfExtents = new Vector3(HullRadius, height * 0.5f, HullRadius) * 0.98f;
+            // Source CanUnduck/TestPlayerPosition checks the full player hull.
+            // Shrinking this query by 2% let the standing hull pass a corner
+            // check while its real collision box still overlapped the wall;
+            // the next CheckStuck then skipped movement and jump processing.
+            // Use the same hull and skin inset as the movement sweeps.
+            Vector3 center = basePosition + _movementUp * (height * 0.5f);
+            Vector3 halfExtents = GetQueryHalfExtents(
+                new Vector3(HullRadius, height * 0.5f, HullRadius));
             int count = Physics.OverlapBoxNonAlloc(
                 center,
                 halfExtents,
@@ -1993,25 +2177,11 @@ namespace RidahFPS.Controllers
                     collider.transform.rotation,
                     out _,
                     out float penetration) &&
-                     penetration > GetContactPenetrationTolerance(collider))
+                    penetration > CollisionSkin)
                     return true;
             }
 
             return false;
-        }
-
-        private float GetContactPenetrationTolerance(Collider other)
-        {
-            if (other == null)
-                return CollisionSkin;
-
-            float hullContactOffset = _sourceHullCollider != null
-                ? _sourceHullCollider.contactOffset
-                : 0f;
-            return Mathf.Max(
-                CollisionSkin,
-                Mathf.Max(hullContactOffset, other.contactOffset)) +
-                CollisionSkin;
         }
 
         private void TryWaterCrouchBoost()
@@ -2280,7 +2450,10 @@ namespace RidahFPS.Controllers
             // adapter left the clear path at origin and added the 2 HU again
             // after a hit, which is the opposite of Source in both cases.
             Vector3 safePosition = position + _movementUp * startOffset;
-            if (TryGetNearestHit(upHitCount, out RaycastHit upHit))
+            if (TryGetNearestBlockingHit(
+                    upHitCount,
+                    _movementUp,
+                    out RaycastHit upHit))
             {
                 safePosition += _movementUp *
                     (Mathf.Max(0f, upHit.distance - CollisionSkin) -
@@ -2305,8 +2478,14 @@ namespace RidahFPS.Controllers
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
 
-            if (!TryGetNearestHit(hitCount, out RaycastHit groundHit) ||
-                Vector3.Dot(groundHit.normal, _movementUp) < WalkableNormal)
+            Vector3 downDirection = downDelta / traceDistance;
+            if (!TryGetNearestBlockingHit(
+                    hitCount,
+                    downDirection,
+                    out RaycastHit groundHit) ||
+                Vector3.Dot(
+                    GetSourcePlaneNormal(groundHit, downDirection),
+                    _movementUp) < WalkableNormal)
                 return;
 
             float safeDistance = Mathf.Clamp(
@@ -2572,62 +2751,6 @@ namespace RidahFPS.Controllers
             return mask;
         }
 
-        private void ResolveInitialPenetration(Transform playerTransform)
-        {
-            if (_sourceHullCollider == null || playerTransform == null)
-                return;
-
-            Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
-            Vector3 queryHalfExtents = GetQueryHalfExtents(halfExtents);
-            for (int iteration = 0; iteration < 4; iteration++)
-            {
-                Vector3 center = playerTransform.position +
-                    _movementUp * halfExtents.y;
-                int count = Physics.OverlapBoxNonAlloc(
-                    center,
-                    queryHalfExtents,
-                    _hullOverlaps,
-                    Quaternion.identity,
-                    GetCollisionMask(),
-                    QueryTriggerInteraction.Ignore);
-
-                bool moved = false;
-                for (int i = 0; i < count; i++)
-                {
-                    Collider other = _hullOverlaps[i];
-                    if (other == null || other == _sourceHullCollider ||
-                        other.transform.IsChildOf(playerTransform))
-                        continue;
-
-                    if (!Physics.ComputePenetration(
-                        _sourceHullCollider,
-                        playerTransform.position,
-                        _sourceHullTransform.rotation,
-                        other,
-                        other.transform.position,
-                        other.transform.rotation,
-                        out Vector3 direction,
-                        out float distance))
-                        continue;
-
-                    // Unity reports a small ComputePenetration distance for
-                    // ordinary contact because colliders have a contact
-                    // offset. Source's CheckStuck is for startsolid/allsolid,
-                    // not for that contact margin. Only resolve penetration
-                    // deeper than the combined Unity contact tolerance.
-                    if (distance <= GetContactPenetrationTolerance(other))
-                        continue;
-
-                    playerTransform.position += direction * (distance + CollisionSkin);
-                    moved = true;
-                    Physics.SyncTransforms();
-                }
-
-                if (!moved)
-                    break;
-            }
-        }
-
         private bool TrySourceStuckRecovery()
         {
             if (!_collisionReady || _sourceHullCollider == null ||
@@ -2642,10 +2765,9 @@ namespace RidahFPS.Controllers
                 return false;
             }
 
-            // CGameMovement::CheckStuck probes the fixed Source offset table.
-            // ResolveInitialPenetration already handled ordinary overlap; this
-            // is the deterministic last-resort path for a hull that still
-            // cannot be placed after a scene/physics transform mismatch.
+            // CGameMovement::CheckStuck probes the fixed Source offset table
+            // only when the hull is actually inside solid geometry. Ordinary
+            // contact is handled by TryPlayerMove's plane clipping below.
             for (int attempt = 0; attempt < SourceStuckOffsetsHu.Length; attempt++)
             {
                 int index = (_stuckOffsetIndex + attempt) %
