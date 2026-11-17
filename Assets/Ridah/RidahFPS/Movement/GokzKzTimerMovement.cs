@@ -929,6 +929,8 @@ namespace RidahFPS.Controllers
             Physics.SyncTransforms();
             RaycastHit finalGroundHit;
             bool finalGrounded = CategorizePosition(out finalGroundHit);
+            if (_sourcePushDetachedThisTick)
+                finalGrounded = false;
             bool landed = !_startGrounded && finalGrounded;
             if (landed)
             {
@@ -2111,7 +2113,6 @@ namespace RidahFPS.Controllers
             _movementVelocity = velocity;
             _surfer.MoveData.Velocity = velocity;
             Grounded = false;
-            _sourcePushDetachedThisTick = true;
             _surfer.MoveData.grounded = false;
             return true;
         }
@@ -2351,8 +2352,11 @@ namespace RidahFPS.Controllers
             Vector3 pushVelocity,
             bool groundAtTickStart)
         {
-            if (!groundAtTickStart ||
-                Vector3.Dot(pushVelocity, _movementUp) <= 0f)
+            if (Vector3.Dot(pushVelocity, _movementUp) <= 0f)
+                return;
+
+            _sourcePushDetachedThisTick = true;
+            if (!groundAtTickStart)
                 return;
 
             Grounded = false;
