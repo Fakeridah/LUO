@@ -9,6 +9,12 @@
 !/Assets/Ridah/
 !/Assets/Ridah/**
 /Assets/Ridah/RidahWeapon/Weapon/Portal/Materials/SpyroPortal/DSB.cubemap
+!/ExternalPackages/
+!/ExternalPackages/**
+!/Packages/
+!/Packages/**
+!/ProjectSettings/
+!/ProjectSettings/**
 
 # Unity/editor/generated content
 **/Library/
