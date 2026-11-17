@@ -696,6 +696,21 @@ namespace RidahFPS.Controllers
                         MoveData.waterType = water.waterType;
                     }
                 }
+
+                GokzMovementVolume movementVolume =
+                    trigger.GetComponentInParent<GokzMovementVolume>();
+                if (movementVolume != null && movementVolume.IsWater)
+                {
+                    GokzWaterLevel level = movementVolume.GetWaterLevel(
+                        transform.position,
+                        GokzCrouched,
+                        GokzEyeDuckAmount);
+                    if (level > MoveData.waterLevel)
+                    {
+                        MoveData.waterLevel = level;
+                        MoveData.waterType = movementVolume.WaterType;
+                    }
+                }
             }
             MoveData.underwater = MoveData.waterLevel >= GokzWaterLevel.Waist;
             MoveData.Booster = Booster;

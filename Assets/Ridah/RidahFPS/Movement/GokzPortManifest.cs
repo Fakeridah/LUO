@@ -42,6 +42,7 @@ namespace RidahFPS.Controllers
                 Adapter("CGameMovement::Duck/CanUnduck", "SourceMovementCore + SurfCharacter", "54/72 HU hulls, Source eye offsets and landing-tick unduck rule"),
                 Adapter("CGameMovement::LadderMove/FullLadderMove", "SourceMovementCore", "ladder-normal projection, 200 HU climb and 270 HU jump-away"),
                 Adapter("CGameMovement::WaterMove/CheckWater", "SourceMovementCore + MoveData.underwater", "Source water friction, 0.8 wish-speed and swim branch; Unity water volumes supply the state"),
+                Adapter("trigger_gravity + trigger_push", "GokzMovementVolume + SourceMovementCore", "One Unity authoring component; Source gravity scale, pushdir/pushspeed and SF_TRIG_PUSH_ONCE are selected by effects"),
                 Unity("gokz-jumpstats", "GokzJumpStats", "jump tracking, types, tiers and events"),
                 Unity("gokz-jumpbeam", "GokzJumpBeam", "jump event beam"),
                 Unity("gokz-hud", "GokzHud", "timer, speed, keys and perf/deadstrafe display"),

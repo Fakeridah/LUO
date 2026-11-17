@@ -18,6 +18,11 @@ namespace RidahFPS.Controllers
         public float gravity;
         public float jumpImpulse;
         public float maxSpeed;
+        // CS:GO's weapon-speed branch is fixed to the default knife for this
+        // Unity port. GOKZ KZTimer/SimpleKZ set sv_accelerate_use_weapon_speed
+        // to 0, while Vanilla leaves it enabled; keeping the value explicit
+        // makes the source branch auditable without adding a weapon system.
+        public float weaponMaxSpeed;
         // Source keeps m_flClientMaxSpeed (sv_maxspeed, normally 320 HU/s)
         // separate from the movement max-speed hook used by GOKZ (250 HU/s
         // times the pre-strafe modifier). WaterMove uses the former for its
@@ -30,6 +35,12 @@ namespace RidahFPS.Controllers
         public bool enableBunnyhopping;
         public bool autoBhop;
         public bool useWeaponSpeed;
+        // CS:GO stamina is a jump/landing penalty, not a separate sprint bar.
+        // Official KZTimer and SimpleKZ set all four values to zero.
+        public float staminaJumpCost;
+        public float staminaLandCost;
+        public float staminaMax;
+        public float staminaRecoveryRate;
         public bool prestrafe;
         public bool tweakPerfJump;
         public bool allowCrouchJump;
@@ -55,6 +66,7 @@ namespace RidahFPS.Controllers
                         gravity = 800f,
                         jumpImpulse = 301.993377f,
                         maxSpeed = 250f,
+                        weaponMaxSpeed = 250f,
                         clientMaxSpeed = 320f,
                         maxVelocity = 3500f,
                         walkableNormal = 0.7f,
@@ -63,6 +75,10 @@ namespace RidahFPS.Controllers
                         enableBunnyhopping = false,
                         autoBhop = false,
                         useWeaponSpeed = true,
+                        staminaJumpCost = 0.080f,
+                        staminaLandCost = 0.050f,
+                        staminaMax = 80f,
+                        staminaRecoveryRate = 60f,
                         prestrafe = false,
                         tweakPerfJump = false,
                         allowCrouchJump = false,
@@ -83,6 +99,7 @@ namespace RidahFPS.Controllers
                         gravity = 800f,
                         jumpImpulse = 301.993377f,
                         maxSpeed = 250f,
+                        weaponMaxSpeed = 250f,
                         clientMaxSpeed = 320f,
                         maxVelocity = 3500f,
                         walkableNormal = 0.7f,
@@ -91,6 +108,10 @@ namespace RidahFPS.Controllers
                         enableBunnyhopping = true,
                         autoBhop = false,
                         useWeaponSpeed = false,
+                        staminaJumpCost = 0f,
+                        staminaLandCost = 0f,
+                        staminaMax = 0f,
+                        staminaRecoveryRate = 0f,
                         prestrafe = true,
                         tweakPerfJump = false,
                         allowCrouchJump = true,
@@ -113,6 +134,7 @@ namespace RidahFPS.Controllers
                         gravity = 800f,
                         jumpImpulse = 301.993377f,
                         maxSpeed = 250f,
+                        weaponMaxSpeed = 250f,
                         clientMaxSpeed = 320f,
                         maxVelocity = 2000f,
                         walkableNormal = 0.7f,
@@ -121,6 +143,10 @@ namespace RidahFPS.Controllers
                         enableBunnyhopping = true,
                         autoBhop = false,
                         useWeaponSpeed = false,
+                        staminaJumpCost = 0f,
+                        staminaLandCost = 0f,
+                        staminaMax = 0f,
+                        staminaRecoveryRate = 0f,
                         prestrafe = true,
                         tweakPerfJump = true,
                         allowCrouchJump = true,

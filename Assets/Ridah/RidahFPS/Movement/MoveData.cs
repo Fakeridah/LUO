@@ -50,6 +50,9 @@ namespace RidahFPS.Controllers
         // separate from friction: CheckParameters scales maxspeed with this
         // factor, while Accelerate uses surface friction.
         public float SurfaceMaxSpeedFactor = 1f;
+        // Source game.jumpFactor scales the jump impulse on the current
+        // ground surface. It is independent from physics.friction.
+        public float SurfaceJumpFactor = 1f;
         public bool isGravity = true;
         public float GravityFactor = 1f;
         public float WalkFactor = 1f;

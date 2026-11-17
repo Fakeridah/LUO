@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace RidahFPS.Controllers
@@ -33,7 +34,7 @@ namespace RidahFPS.Controllers
         private float GetPlayerMaxSpeed(float realPreVelMod) =>
             GokzMovementRules.GetPlayerMaxSpeed(
                 _settings.maxSpeed,
-                realPreVelMod) * UnitScale;
+                realPreVelMod) * UnitScale * GetStaminaSpeedScale();
         private float PreVelModMax => _settings.preVelModMax;
         private float PerfSpeedCap => _settings.perfSpeedCap * UnitScale;
         private float Accelerate => _settings.accelerate;
@@ -58,6 +59,7 @@ namespace RidahFPS.Controllers
         private const float CollisionSkin = 0.001f;
         private const float SourceMinimumMoveFraction = 0.0001f;
         private const float SourceCheckStuckInterval = 1f;
+        private const float SourceStaminaRange = 100f;
 
         // CS:GO's continuous duck state. GOKZ does not replace Source's duck
         // animation; it only prevents the engine's duck-spam slowdown from
@@ -165,6 +167,7 @@ namespace RidahFPS.Controllers
         private bool _simpleTurningLeft;
         private float _landingPreVelMod = 1f;
         private Vector3 _landingVelocity;
+        private float _stamina;
 
         private Vector3 _movementVelocity;
         private Vector3 _baseVelocity;
@@ -177,11 +180,19 @@ namespace RidahFPS.Controllers
         private Vector3 _sampledGroundVelocity;
         private bool _hasGroundTransformSample;
         private readonly Collider[] _hullOverlaps = new Collider[32];
+        private readonly Collider[] _sourceVolumeOverlaps = new Collider[64];
+        private readonly HashSet<GokzMovementVolume> _sourceVolumesThisTick =
+            new HashSet<GokzMovementVolume>();
+        private readonly HashSet<GokzMovementVolume> _consumedSourcePushVolumes =
+            new HashSet<GokzMovementVolume>();
         private readonly RaycastHit[] _moveHits = new RaycastHit[8];
         private BoxCollider _sourceHullCollider;
         private Transform _sourceHullTransform;
         private Rigidbody _sourceRigidbody;
         private bool _collisionReady;
+        private float _sourceGravityScale = 1f;
+        private Vector3 _sourceTriggerBaseVelocity;
+        private bool _sourcePushDetachedThisTick;
         private bool _originalCharacterControllerEnabled;
         private bool _originalRigidbodyKinematic;
         private bool _originalRigidbodyUseGravity;
@@ -198,9 +209,12 @@ namespace RidahFPS.Controllers
         public bool LastJumpWasDuck { get; private set; }
         public int JumpCount { get; private set; }
         public float LastTakeoffSpeed { get; private set; }
+        public float Stamina => _stamina;
         public float Speed { get; private set; }
         public Vector3 MovementVelocity => _movementVelocity;
         public GokzMode Mode => _mode;
+        public float SourceGravityScale => _sourceGravityScale;
+        public Vector3 SourceTriggerBaseVelocity => _sourceTriggerBaseVelocity;
 
         public void SetMode(GokzMode mode)
         {
@@ -218,6 +232,7 @@ namespace RidahFPS.Controllers
             _simpleTurningLeft = false;
             _landingPreVelMod = 1f;
             _landingVelocity = Vector3.zero;
+            _stamina = 0f;
         }
 
         public void EnableSourceCollision(ISurfControllable surfer)
@@ -301,7 +316,6 @@ namespace RidahFPS.Controllers
 
             ResolveInitialPenetration(surfer.MoveData.playerTransform);
             Vector3 startPosition = surfer.MoveData.playerTransform.position;
-            _baseVelocity = GetBaseVelocity(surfer.MoveData.playerTransform);
             // MoveData.Velocity is authoritative. The cached velocity is a
             // diagnostic value and must not swallow a velocity written by a
             // checkpoint, replay or teleport between Process and Move.
@@ -712,6 +726,7 @@ namespace RidahFPS.Controllers
             if (_surfer.MoveData.wishJump || _surfer.MoveData.jumpHeld)
                 _lastJumpRequestTick = _movementTick;
             LastJumpWasPerfect = false;
+            _sourcePushDetachedThisTick = false;
 
             // The project can temporarily reverse gravity or disable it in a
             // trigger. The normal state remains the exact GOKZ +Z-up path.
@@ -720,6 +735,11 @@ namespace RidahFPS.Controllers
             // Sample the ground entity before recategorizing. This is the
             // Unity equivalent of Source reading GetAbsVelocity() from the
             // entity attached during the previous command.
+            bool groundAtTickStart = Grounded;
+            UpdateSourceMovementVolumes(groundAtTickStart);
+            Vector3 groundVelocityAtTickStart = groundAtTickStart
+                ? GetGroundEntityVelocity(_groundHit)
+                : Vector3.zero;
             UpdateGroundEntityVelocitySample();
 
             // The active controller moves the root Transform directly. Keep
@@ -735,13 +755,14 @@ namespace RidahFPS.Controllers
                 // player and PlayerMove exits before Duck/FullWalkMove. Keep
                 // that ordering: do not apply another gravity half-step or
                 // let the normal movement branch push deeper into the solid.
-                bool wasGroundedBeforeStuckCheck = Grounded;
                 _movementBlockedThisTick = true;
                 _movementVelocity = Vector3.zero;
                 _surfer.MoveData.Velocity = Vector3.zero;
                 Grounded = CategorizePosition(out _groundHit);
+                if (_sourcePushDetachedThisTick)
+                    Grounded = false;
                 _groundNormal = Grounded ? _groundHit.normal : _movementUp;
-                _startGrounded = wasGroundedBeforeStuckCheck;
+                _startGrounded = groundAtTickStart;
                 _landedThisTick = false;
                 _landingAvailable = false;
                 _duckedAtProcessStart = _isCrouched;
@@ -752,14 +773,24 @@ namespace RidahFPS.Controllers
                     ? (_lastGroundSurfaceMaxSpeedFactor =
                         GetSurfaceMaxSpeedFactor(_groundHit))
                     : _lastGroundSurfaceMaxSpeedFactor;
+                _surfer.MoveData.SurfaceJumpFactor = Grounded
+                    ? GetSurfaceJumpFactor(_groundHit)
+                    : 1f;
                 _surfer.MoveData.grounded = Grounded;
                 _surfer.MoveData.groundTransform = Grounded
                     ? _groundHit.transform
                     : null;
+                _baseVelocity = groundAtTickStart && !Grounded
+                    ? _surfer.BaseVelocity + groundVelocityAtTickStart +
+                        _sourceTriggerBaseVelocity
+                    : GetBaseVelocity(
+                        _surfer.MoveData.playerTransform);
                 _tickStarted = true;
                 return;
             }
             Grounded = CategorizePosition(out _groundHit);
+            if (_sourcePushDetachedThisTick)
+                Grounded = false;
             _groundNormal = Grounded ? _groundHit.normal : _movementUp;
             _surfer.MoveData.SurfaceFriction = Grounded
                 ? GetSurfaceFriction(_groundHit)
@@ -768,11 +799,25 @@ namespace RidahFPS.Controllers
                 ? (_lastGroundSurfaceMaxSpeedFactor =
                     GetSurfaceMaxSpeedFactor(_groundHit))
                 : _lastGroundSurfaceMaxSpeedFactor;
-            _startGrounded = Grounded;
+            _surfer.MoveData.SurfaceJumpFactor = Grounded
+                ? GetSurfaceJumpFactor(_groundHit)
+                : 1f;
+            // This is Source's old ground entity state, not the result of the
+            // new CategorizePosition trace. Finish() uses it to distinguish a
+            // real landing from a player who was already grounded.
+            _startGrounded = groundAtTickStart;
             _landedThisTick = _landingAvailable;
             _landingAvailable = false;
             _surfer.MoveData.grounded = Grounded;
             _surfer.MoveData.groundTransform = Grounded ? _groundHit.transform : null;
+            // Source's StartGravity consumes the vertical component of the
+            // ground entity base velocity before the movement trace. Cache it
+            // before any jump/air branch changes the ground flag.
+            _baseVelocity = groundAtTickStart && !Grounded
+                ? _surfer.BaseVelocity + groundVelocityAtTickStart +
+                    _sourceTriggerBaseVelocity
+                : GetBaseVelocity(
+                    _surfer.MoveData.playerTransform);
             _onLadderThisTick = false;
             _waterJumpProcessedThisTick = false;
             _wasOnLadder = _surfer.MoveData.climbingLadder;
@@ -891,6 +936,10 @@ namespace RidahFPS.Controllers
                 _groundHit = finalGroundHit;
                 _groundNormal = finalGroundHit.normal;
                 Vector3 incomingVelocity = _surfer.MoveData.Velocity;
+                AddLandingStamina(Mathf.Max(
+                    0f,
+                    -Vector3.Dot(incomingVelocity, _movementUp) *
+                        HammerUnitsPerUnityUnit));
                 Vector3 horizontalVelocity = Vector3.ProjectOnPlane(
                     incomingVelocity,
                     _movementUp);
@@ -916,6 +965,9 @@ namespace RidahFPS.Controllers
                 ? (_lastGroundSurfaceMaxSpeedFactor =
                     GetSurfaceMaxSpeedFactor(finalGroundHit))
                 : _lastGroundSurfaceMaxSpeedFactor;
+            _surfer.MoveData.SurfaceJumpFactor = finalGrounded
+                ? GetSurfaceJumpFactor(finalGroundHit)
+                : 1f;
 
             Grounded = finalGrounded;
             if (!_movementBlockedThisTick &&
@@ -999,6 +1051,7 @@ namespace RidahFPS.Controllers
             _simpleTurningLeft = false;
             _landingPreVelMod = 1f;
             _landingVelocity = Vector3.zero;
+            _stamina = 0f;
             _isCrouched = false;
             _ducking = false;
             _duckAmount = 0f;
@@ -1020,6 +1073,11 @@ namespace RidahFPS.Controllers
             _hullInitialized = false;
             _movementVelocity = Vector3.zero;
             _baseVelocity = Vector3.zero;
+            _sourceGravityScale = 1f;
+            _sourceTriggerBaseVelocity = Vector3.zero;
+            _sourcePushDetachedThisTick = false;
+            _sourceVolumesThisTick.Clear();
+            _consumedSourcePushVolumes.Clear();
             _sampledGroundTransform = null;
             _sampledGroundPosition = Vector3.zero;
             _sampledGroundVelocity = Vector3.zero;
@@ -1036,6 +1094,18 @@ namespace RidahFPS.Controllers
         {
             float gravity = GetGravityAcceleration();
             _surfer.MoveData.Velocity -= _movementUp * gravity * TickInterval * 0.5f;
+
+            // CGameMovement::StartGravity applies one frame of the ground
+            // entity's vertical base velocity to the player velocity, then
+            // removes that vertical component from base velocity. Horizontal
+            // base velocity remains available to TryPlayerMove in Move().
+            float baseVelocityUp = Vector3.Dot(_baseVelocity, _movementUp);
+            if (Mathf.Abs(baseVelocityUp) > 0.000001f)
+            {
+                _surfer.MoveData.Velocity += _movementUp *
+                    (baseVelocityUp * TickInterval);
+                _baseVelocity -= _movementUp * baseVelocityUp;
+            }
         }
 
         private void FinishGravity()
@@ -1050,6 +1120,14 @@ namespace RidahFPS.Controllers
             // m_nDuckTimeMsecs field. CS:GO's overridden Duck() uses
             // m_flDuckAmount/m_flDuckSpeed instead, so there is no duck timer
             // to advance in this port.
+            if (_settings.staminaMax > 0f &&
+                _settings.staminaRecoveryRate > 0f &&
+                _stamina > 0f)
+            {
+                _stamina = Mathf.Max(
+                    0f,
+                    _stamina - _settings.staminaRecoveryRate * TickInterval);
+            }
         }
 
         private bool CheckJumpButton()
@@ -1086,6 +1164,19 @@ namespace RidahFPS.Controllers
 
             if (!_settings.enableBunnyhopping)
                 PreventBunnyJumping();
+
+            // Source SetGroundEntity(NULL) preserves the ground entity's
+            // velocity when a jump starts. StartGravity has already consumed
+            // and cleared the vertical base component for this command, so
+            // restore only the platform's vertical component here; the
+            // horizontal component is already cached in _baseVelocity.
+            if (_groundHit.collider != null)
+            {
+                float groundVelocityUp = Vector3.Dot(
+                    GetGroundEntityVelocity(_groundHit),
+                    _movementUp);
+                _baseVelocity += _movementUp * groundVelocityUp;
+            }
 
             // MovementAPI's normal KZTimer perf is the landing command. The
             // SimpleKZ mode deliberately widens this to its source command
@@ -1902,8 +1993,11 @@ namespace RidahFPS.Controllers
                     candidate.distance >= nearestDistance)
                     continue;
                 GokzLadder ladder = candidate.collider.GetComponentInParent<GokzLadder>();
+                bool surfaceClimbable =
+                    GokzSurfaceProperties.Resolve(candidate.collider)
+                        .sourceClimbable;
                 if ((ladder != null && !ladder.Climbable) ||
-                    (ladder == null && !candidate.collider.CompareTag("Ladder")))
+                    (ladder == null && !surfaceClimbable))
                     continue;
                 ladderHit = candidate;
                 nearestDistance = candidate.distance;
@@ -2017,6 +2111,7 @@ namespace RidahFPS.Controllers
             _movementVelocity = velocity;
             _surfer.MoveData.Velocity = velocity;
             Grounded = false;
+            _sourcePushDetachedThisTick = true;
             _surfer.MoveData.grounded = false;
             return true;
         }
@@ -2077,8 +2172,10 @@ namespace RidahFPS.Controllers
                 return false;
 
             GokzLadder ladder = collider.GetComponentInParent<GokzLadder>();
+            bool surfaceClimbable =
+                GokzSurfaceProperties.Resolve(collider).sourceClimbable;
             return (ladder != null && ladder.Climbable) ||
-                (ladder == null && collider.CompareTag("Ladder"));
+                (ladder == null && surfaceClimbable);
         }
 
         private void StayOnGround(ref Vector3 position, Vector3 halfExtents)
@@ -2143,6 +2240,10 @@ namespace RidahFPS.Controllers
         private Vector3 GetBaseVelocity(Transform playerTransform)
         {
             Vector3 baseVelocity = _surfer != null ? _surfer.BaseVelocity : Vector3.zero;
+            // Source trigger_push writes FL_BASEVELOCITY. Keep it in the
+            // same base-velocity path as moving ground so StartGravity and
+            // Move consume it in the Source order.
+            baseVelocity += _sourceTriggerBaseVelocity;
             // Source keeps the ground entity's base velocity when
             // SetGroundEntity(NULL) is called by a jump. At that point
             // Grounded is already false, so use the ground captured at the
@@ -2161,6 +2262,109 @@ namespace RidahFPS.Controllers
             }
 
             return baseVelocity + groundBody.GetPointVelocity(playerTransform.position);
+        }
+
+        private void UpdateSourceMovementVolumes(bool groundAtTickStart)
+        {
+            _sourceGravityScale = 1f;
+            _sourceTriggerBaseVelocity = Vector3.zero;
+            _sourceVolumesThisTick.Clear();
+
+            if (_surfer == null || _surfer.MoveData.playerTransform == null)
+                return;
+
+            Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
+            Vector3 center = _surfer.MoveData.playerTransform.position +
+                _movementUp * halfExtents.y;
+            int count = Physics.OverlapBoxNonAlloc(
+                center,
+                GetQueryHalfExtents(halfExtents),
+                _sourceVolumeOverlaps,
+                Quaternion.identity,
+                Physics.AllLayers,
+                QueryTriggerInteraction.Collide);
+
+            GokzMovementVolume selectedGravity = null;
+
+            for (int i = 0; i < count; i++)
+            {
+                Collider overlap = _sourceVolumeOverlaps[i];
+                if (overlap == null || overlap == _sourceHullCollider ||
+                    overlap.transform.IsChildOf(
+                        _surfer.MoveData.playerTransform))
+                    continue;
+
+                GokzMovementVolume volume =
+                    overlap.GetComponentInParent<GokzMovementVolume>();
+                if (volume == null || !volume.isActiveAndEnabled)
+                    continue;
+
+                if (!_sourceVolumesThisTick.Add(volume))
+                    continue;
+
+                if (volume.IsGravity)
+                {
+                    // Source normally has one gravity trigger at a time. A
+                    // deterministic priority resolves overlapping imported
+                    // volumes without depending on PhysX overlap ordering.
+                    if (selectedGravity == null ||
+                        volume.Priority > selectedGravity.Priority)
+                    {
+                        selectedGravity = volume;
+                    }
+                    continue;
+                }
+
+                if (!volume.IsPush)
+                    continue;
+
+                Vector3 pushVelocity = volume.WorldPushVelocity;
+                if (volume.PushOnce)
+                {
+                    if (_consumedSourcePushVolumes.Contains(volume))
+                        continue;
+
+                    _consumedSourcePushVolumes.Add(volume);
+                    _surfer.MoveData.Velocity += pushVelocity;
+                    DetachFromGroundForPush(
+                        pushVelocity,
+                        groundAtTickStart);
+                }
+                else
+                {
+                    // CTriggerPush adds its velocity to the player's base
+                    // velocity every touch. Summing overlapping pushes keeps
+                    // that Source behavior and leaves the result to the
+                    // normal StartGravity/Move/Finish consumption path.
+                    _sourceTriggerBaseVelocity += pushVelocity;
+                    DetachFromGroundForPush(
+                        pushVelocity,
+                        groundAtTickStart);
+                }
+            }
+
+            if (selectedGravity != null)
+                _sourceGravityScale = selectedGravity.GravityScale;
+        }
+
+        private void DetachFromGroundForPush(
+            Vector3 pushVelocity,
+            bool groundAtTickStart)
+        {
+            if (!groundAtTickStart ||
+                Vector3.Dot(pushVelocity, _movementUp) <= 0f)
+                return;
+
+            Grounded = false;
+            _surfer.MoveData.grounded = false;
+            if (_surfer.MoveData.playerTransform != null)
+            {
+                Vector3 origin = _surfer.MoveData.playerTransform.position +
+                    _movementUp * UnitScale;
+                _surfer.MoveData.playerTransform.position = origin;
+                _surfer.MoveData.Origin = origin;
+                Physics.SyncTransforms();
+            }
         }
 
         private Transform GetGroundEntityTransform(RaycastHit groundHit)
@@ -2217,26 +2421,20 @@ namespace RidahFPS.Controllers
 
         private static float GetSurfaceFriction(RaycastHit hit)
         {
-            if (hit.collider == null)
-                return 1f;
-
-            GokzSurfaceProperties properties =
-                hit.collider.GetComponentInParent<GokzSurfaceProperties>();
-            return properties == null
-                ? 1f
-                : Mathf.Max(0f, properties.sourceFriction);
+            return Mathf.Max(0f,
+                GokzSurfaceProperties.Resolve(hit.collider).sourceFriction);
         }
 
         private static float GetSurfaceMaxSpeedFactor(RaycastHit hit)
         {
-            if (hit.collider == null)
-                return 1f;
+            return Mathf.Max(0f,
+                GokzSurfaceProperties.Resolve(hit.collider).sourceMaxSpeedFactor);
+        }
 
-            GokzSurfaceProperties properties =
-                hit.collider.GetComponentInParent<GokzSurfaceProperties>();
-            return properties == null
-                ? 1f
-                : Mathf.Max(0f, properties.sourceMaxSpeedFactor);
+        private static float GetSurfaceJumpFactor(RaycastHit hit)
+        {
+            return Mathf.Max(0f,
+                GokzSurfaceProperties.Resolve(hit.collider).sourceJumpFactor);
         }
 
         private void ConfigureSourceHullTransform(Transform playerTransform)
@@ -2490,7 +2688,10 @@ namespace RidahFPS.Controllers
                 _surfer.MoveData.SurfaceFriction,
                 movementScale,
                 TickInterval,
-                walkButtonDown);
+                walkButtonDown,
+                duckButtonDown,
+                _settings.useWeaponSpeed,
+                _settings.weaponMaxSpeed);
 
             // CGameMovement::WalkMove performs a final horizontal maxspeed
             // clamp after acceleration. Leaving this out is the direct cause
@@ -2819,6 +3020,12 @@ namespace RidahFPS.Controllers
             float jumpVerticalSpeed = crouchJump
                 ? JumpImpulse
                 : currentVerticalSpeed + JumpImpulse;
+            float jumpImpulseHu = Mathf.Abs(
+                (jumpVerticalSpeed - currentVerticalSpeed) *
+                    HammerUnitsPerUnityUnit);
+            jumpVerticalSpeed *= GetStaminaJumpScale();
+            jumpVerticalSpeed *= Mathf.Max(
+                0f, _surfer.MoveData.SurfaceJumpFactor);
             velocity = horizontalVelocity + _movementUp * jumpVerticalSpeed;
             _surfer.MoveData.Velocity = velocity;
 
@@ -2835,6 +3042,7 @@ namespace RidahFPS.Controllers
             // ordering as Source instead of silently giving the jump one
             // extra half-tick of vertical velocity.
             FinishGravity();
+            AddJumpStamina(jumpImpulseHu);
 
             _surfer.MoveData.hasJump = true;
             _surfer.MoveData.grounded = false;
@@ -3107,7 +3315,53 @@ namespace RidahFPS.Controllers
             if (_surfer == null || !_surfer.MoveData.isGravity || _surfer.MoveData.LoseWeight)
                 return 0f;
 
-            return Gravity * Mathf.Max(0f, _surfer.MoveData.GravityFactor);
+            return Gravity * Mathf.Max(0f, _surfer.MoveData.GravityFactor) *
+                _sourceGravityScale;
+        }
+
+        private float GetStaminaSpeedScale()
+        {
+            if (_settings.staminaMax <= 0f || _stamina <= 0f)
+                return 1f;
+
+            // CCSGameMovement uses the fixed STAMINA_RANGE (100), while the
+            // mode cvar limits the accumulated value to sv_staminamax.
+            float scale = Mathf.Clamp01(
+                1f - _stamina / SourceStaminaRange);
+            return scale * scale;
+        }
+
+        private float GetStaminaJumpScale()
+        {
+            if (_settings.staminaMax <= 0f || _stamina <= 0f)
+                return 1f;
+
+            return Mathf.Clamp01(1f - _stamina / SourceStaminaRange);
+        }
+
+        private void AddJumpStamina(float impulseHu)
+        {
+            if (_settings.staminaMax <= 0f ||
+                _settings.staminaJumpCost <= 0f)
+                return;
+
+            _stamina = Mathf.Clamp(
+                _stamina + _settings.staminaJumpCost * impulseHu,
+                0f,
+                _settings.staminaMax);
+        }
+
+        private void AddLandingStamina(float fallVelocityHu)
+        {
+            if (_settings.staminaMax <= 0f ||
+                _settings.staminaLandCost <= 0f ||
+                fallVelocityHu <= 0f)
+                return;
+
+            _stamina = Mathf.Clamp(
+                _stamina + _settings.staminaLandCost * fallVelocityHu,
+                0f,
+                _settings.staminaMax);
         }
 
         private float UpdatePrestrafeModifier(bool grounded)

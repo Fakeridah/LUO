@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 
 namespace RidahFPS.Controllers.Tests
@@ -533,6 +534,83 @@ namespace RidahFPS.Controllers.Tests
                 _core.MovementVelocity.y *
                     GokzMovementRules.HammerUnitsPerUnityUnit,
                 Is.LessThan(0f));
+        }
+
+        [Test]
+        public void PushVolumeMovesPlayerThroughSourceBaseVelocity()
+        {
+            _surfer.MoveData.verticalAxis = 0f;
+            _surfer.MoveData.horizontalAxis = 0f;
+            _surfer.MoveData.moveForward = false;
+            _surfer.MoveData.moveBack = false;
+            _surfer.MoveData.moveLeft = false;
+            _surfer.MoveData.moveRight = false;
+
+            _extraObject = new GameObject("GokzPushVolumeTest");
+            _extraObject.transform.position = new Vector3(0f, 3f, 0f);
+            BoxCollider pushCollider =
+                _extraObject.AddComponent<BoxCollider>();
+            pushCollider.size = new Vector3(10f, 10f, 10f);
+            pushCollider.isTrigger = true;
+            GokzMovementVolume pushVolume =
+                _extraObject.AddComponent<GokzMovementVolume>();
+
+            SerializedObject serialized = new SerializedObject(pushVolume);
+            serialized.FindProperty("movementType").enumValueIndex =
+                (int)GokzMovementVolumeType.Push;
+            serialized.FindProperty("localPushDirection").vector3Value =
+                Vector3.right;
+            serialized.FindProperty("pushSpeedHU").floatValue = 400f;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            Physics.SyncTransforms();
+
+            float startX = _playerObject.transform.position.x;
+            for (int tick = 0; tick < 32; tick++)
+                Tick();
+
+            Assert.That(
+                _playerObject.transform.position.x,
+                Is.GreaterThan(startX + 0.5f));
+        }
+
+        [Test]
+        public void UpwardPushVolumeDetachesGroundEntityLikeSource()
+        {
+            _surfer.MoveData.verticalAxis = 0f;
+            _surfer.MoveData.horizontalAxis = 0f;
+            _surfer.MoveData.moveForward = false;
+            _surfer.MoveData.moveBack = false;
+            _surfer.MoveData.moveLeft = false;
+            _surfer.MoveData.moveRight = false;
+
+            _extraObject = new GameObject("GokzUpwardPushVolumeTest");
+            _extraObject.transform.position = new Vector3(0f, 3f, 0f);
+            BoxCollider pushCollider =
+                _extraObject.AddComponent<BoxCollider>();
+            pushCollider.size = new Vector3(10f, 10f, 10f);
+            pushCollider.isTrigger = true;
+            GokzMovementVolume pushVolume =
+                _extraObject.AddComponent<GokzMovementVolume>();
+
+            SerializedObject serialized = new SerializedObject(pushVolume);
+            serialized.FindProperty("movementType").enumValueIndex =
+                (int)GokzMovementVolumeType.Push;
+            serialized.FindProperty("localPushDirection").vector3Value =
+                Vector3.up;
+            // Source trigger_push values used as jump pads are normally much
+            // larger than the entity's 100 HU/s default. The vertical base
+            // velocity is multiplied by frametime in StartGravity.
+            serialized.FindProperty("pushSpeedHU").floatValue = 10000f;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            Physics.SyncTransforms();
+
+            float startY = _playerObject.transform.position.y;
+            for (int tick = 0; tick < 16; tick++)
+                Tick();
+
+            Assert.That(
+                _playerObject.transform.position.y,
+                Is.GreaterThan(startY + 0.1f));
         }
 
         private void Tick()

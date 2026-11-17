@@ -18,6 +18,12 @@ namespace RidahFPS.Controllers.Tests
             Assert.That(settings.gravity, Is.EqualTo(800f).Within(0.0001f));
             Assert.That(settings.jumpImpulse, Is.EqualTo(301.993377f).Within(0.0001f));
             Assert.That(settings.maxVelocity, Is.EqualTo(2000f).Within(0.0001f));
+            Assert.That(settings.weaponMaxSpeed, Is.EqualTo(250f).Within(0.0001f));
+            Assert.That(settings.useWeaponSpeed, Is.False);
+            Assert.That(settings.staminaJumpCost, Is.EqualTo(0f));
+            Assert.That(settings.staminaLandCost, Is.EqualTo(0f));
+            Assert.That(settings.staminaMax, Is.EqualTo(0f));
+            Assert.That(settings.staminaRecoveryRate, Is.EqualTo(0f));
         }
 
         [Test]
@@ -142,6 +148,93 @@ namespace RidahFPS.Controllers.Tests
             Assert.That(
                 result.magnitude * GokzMovementRules.HammerUnitsPerUnityUnit,
                 Is.EqualTo(expectedHu).Within(0.0001f));
+        }
+
+        [Test]
+        public void KnifeWeaponSpeedBranchDoesNotChangeDefaultAcceleration()
+        {
+            Vector3 result = GokzMovementRules.AccelerateCsGo(
+                Vector3.zero,
+                Vector3.forward,
+                250f / GokzMovementRules.HammerUnitsPerUnityUnit,
+                6.5f,
+                1f,
+                1f,
+                GokzMovementRules.TickInterval,
+                false,
+                false,
+                true,
+                250f);
+
+            float expectedHu = 6.5f * (1f / 128f) * 250f;
+            Assert.That(
+                result.magnitude * GokzMovementRules.HammerUnitsPerUnityUnit,
+                Is.EqualTo(expectedHu).Within(0.0001f));
+        }
+
+        [Test]
+        public void SourceSurfacePresetsProvideDefaultAndIceData()
+        {
+            GokzSourceSurfaceData defaultSurface =
+                GokzSourceSurfaceData.For(GokzSurfacePreset.Default);
+            GokzSourceSurfaceData iceSurface =
+                GokzSourceSurfaceData.For(GokzSurfacePreset.Ice);
+
+            Assert.That(defaultSurface.sourceFriction, Is.EqualTo(1f));
+            Assert.That(defaultSurface.sourceMaxSpeedFactor, Is.EqualTo(1f));
+            Assert.That(defaultSurface.sourceJumpFactor, Is.EqualTo(1f));
+            Assert.That(defaultSurface.sourceClimbable, Is.False);
+            Assert.That(iceSurface.sourceFriction, Is.EqualTo(0.05f));
+            Assert.That(iceSurface.sourceMaxSpeedFactor, Is.EqualTo(1f));
+            Assert.That(iceSurface.sourceJumpFactor, Is.EqualTo(1f));
+            Assert.That(iceSurface.sourceClimbable, Is.False);
+        }
+
+        [Test]
+        public void AllSourceMovementSurfaceNamesResolve()
+        {
+            foreach (GokzSurfacePreset preset in
+                (GokzSurfacePreset[])System.Enum.GetValues(
+                    typeof(GokzSurfacePreset)))
+            {
+                GokzSourceSurfaceData data =
+                    GokzSourceSurfaceData.For(preset);
+
+                Assert.That(float.IsNaN(data.sourceFriction), Is.False);
+                Assert.That(float.IsNaN(data.sourceMaxSpeedFactor), Is.False);
+                Assert.That(float.IsNaN(data.sourceJumpFactor), Is.False);
+                Assert.That(data.sourceFriction, Is.GreaterThanOrEqualTo(0f));
+                Assert.That(data.sourceMaxSpeedFactor, Is.GreaterThanOrEqualTo(0f));
+                Assert.That(data.sourceJumpFactor, Is.GreaterThanOrEqualTo(0f));
+            }
+
+            Assert.That(
+                GokzSourceSurfaceData.For(GokzSurfacePreset.Ladder)
+                    .sourceClimbable,
+                Is.True);
+        }
+
+        [Test]
+        public void IceTagResolvesToTheIceSurfacePreset()
+        {
+            GameObject surfaceObject = new GameObject("IceSurfaceTest");
+            try
+            {
+                surfaceObject.AddComponent<BoxCollider>();
+                surfaceObject.tag = "Ice";
+
+                GokzSourceSurfaceData data =
+                    GokzSurfaceProperties.Resolve(
+                        surfaceObject.GetComponent<Collider>());
+
+                Assert.That(data.sourceFriction, Is.EqualTo(0.05f));
+                Assert.That(data.sourceMaxSpeedFactor, Is.EqualTo(1f));
+                Assert.That(data.sourceJumpFactor, Is.EqualTo(1f));
+            }
+            finally
+            {
+                Object.DestroyImmediate(surfaceObject);
+            }
         }
     }
 }

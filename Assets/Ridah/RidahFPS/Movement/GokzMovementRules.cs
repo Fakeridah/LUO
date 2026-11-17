@@ -125,7 +125,10 @@ namespace RidahFPS.Controllers
             float surfaceFriction,
             float movementScale = 1f,
             float tickInterval = TickInterval,
-            bool isWalking = false)
+            bool isWalking = false,
+            bool isDucking = false,
+            bool useWeaponSpeed = false,
+            float weaponMaxSpeedHu = SpeedNormalHu)
         {
             if (wishDirection.sqrMagnitude < 0.000001f || wishSpeed <= 0f)
                 return velocity;
@@ -145,10 +148,24 @@ namespace RidahFPS.Controllers
             // is already expressed in Unity units at this boundary, so the
             // 250-HU floor must be converted once, not multiplied by the
             // HU-per-Unity conversion factor.
-            float accelerationScale = Mathf.Max(
-                SpeedNormalHu / HammerUnitsPerUnityUnit,
-                wishSpeed) * movementScale;
-            float goalSpeed = accelerationScale;
+            float baseAccelerationScaleHu = Mathf.Max(
+                SpeedNormalHu,
+                wishSpeed * HammerUnitsPerUnityUnit);
+            float weaponSpeedScale = useWeaponSpeed
+                ? Mathf.Min(1f, weaponMaxSpeedHu / SpeedNormalHu)
+                : 1f;
+            float goalSpeedHu = baseAccelerationScaleHu * weaponSpeedScale;
+            // Source only scales the acceleration term by weapon speed when
+            // neither ducking nor walking. The goal speed is always scaled,
+            // then both terms receive the duck/walk modifier.
+            float accelerationScaleHu = baseAccelerationScaleHu;
+            if (!isDucking && !isWalking)
+                accelerationScaleHu *= weaponSpeedScale;
+
+            float accelerationScale = accelerationScaleHu /
+                HammerUnitsPerUnityUnit * movementScale;
+            float goalSpeed = goalSpeedHu /
+                HammerUnitsPerUnityUnit * movementScale;
             float storedAcceleration = acceleration;
             if (isWalking && currentSpeed > goalSpeed -
                 5f / HammerUnitsPerUnityUnit)
