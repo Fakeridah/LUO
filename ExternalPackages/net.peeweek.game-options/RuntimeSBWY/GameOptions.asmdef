@@ -1,0 +1,23 @@
+{
+    "name": "GameOptions",
+    "rootNamespace": "",
+    "references": [
+        "GUID:df380645f10b7bc4b97d4f5eb6303d95",
+        "GUID:104d99d0fe4ba064eb2a92b066c94ac1"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.render-pipelines.high-definition",
+            "expression": "7.0.0",
+            "define": "GAME_OPTIONS_HDRP"
+        }
+    ],
+    "noEngineReferences": false
+}
