@@ -5,6 +5,8 @@
 > 当前状态：进行中。本文档描述的是已经检查到的事实，不代表运动系统已经达到 GOKZ 源码一致性。
 >
 > 建立日期：2026-11-13
+>
+> 当前工作区状态以第 17 节为准；早期会话记录与阶段计划是历史快照，若与当前代码冲突，不得照抄为现状。
 
 ---
 
@@ -46,7 +48,7 @@
 | 原有控制器 | `CharacterController`，仍保留但 GOKZ 路径运行时会禁用 |
 | 新碰撞体 | 玩家子物体 `GokzSourceHull`，运行时用于盒体扫掠 |
 | 地面层 | Layer `Wall`，编号 8 |
-| 玩家层 | Layer `Player`，编号 9 |
+| 玩家根对象/碰撞体层 | Player 根对象为 Layer `Gameplay`（6）、Tag `Player`；场景中的 `GokzSourceHull` 子对象为 Layer `Player`（9） |
 | 当前墙/地面碰撞 | Player 与 Wall 未被 Layer Collision Matrix 忽略 |
 
 ### 项目背景
@@ -80,23 +82,9 @@ LUO 原本已经有一个基于 `CharacterController` 和旧 KZ/Surf 逻辑的�
 
 ### 2.2 MovementAPI
 
-主要参考：
+本项目当前随附的 MovementAPI 文件只有 `ThirdParty/gokz-master/addons/sourcemod/scripting/include/movementapi.inc`。它是接口声明，不含 MovementAPI 的运行时代码。插件里能看到 GOKZ 如何订阅 MovementAPI 事件、读取 `player.HitPerf` 并在条件成立时修改跳跃速度；但不能从这个 include 推断 `HitPerf` 的内部判定时序。
 
-- [MovementAPI 主文件](https://github.com/danzayau/MovementAPI/blob/master/addons/sourcemod/scripting/movementapi.sp)
-- [MovementAPI hooks.sp](https://github.com/danzayau/MovementAPI/blob/master/addons/sourcemod/scripting/movementapi/hooks.sp)
-- [MovementAPI forwards.sp](https://github.com/danzayau/MovementAPI/blob/master/addons/sourcemod/scripting/movementapi/forwards.sp)
-- [MovementAPI include](https://github.com/danzayau/MovementAPI/blob/master/addons/sourcemod/scripting/include/movementapi.inc)
-
-MovementAPI 不是可有可无的辅助文件。它负责记录和暴露：
-
-- 当前 tick/cmdnum；
-- landing/takeoff 状态；
-- `WalkMoved`；
-- HitPerf；
-- duckbug、jumpbug、edgebug、distbug；
-- ladder 状态；
-- 碰撞次数和每次碰撞的起点、终点、法线；
-- Duck、WalkMove、AirAccelerate、CategorizePosition、TryPlayerMove 等阶段的前后事件。
+旧记录中把 Perf 解释成由 `OldWalkMoved` 判定的说法，随附源码并不能支持，应视为未证实。任何关于 Perf 窗口或 MovementAPI landing/takeoff 更新先后的结论，都必须有 MovementAPI 实现源码或真实参考轨迹支撑。当前 Unity 的 `_landedThisTick` 是项目内近似，不能写成 MovementAPI 的等价实现。
 
 ### 2.3 CS:GO 引擎移动代码
 
@@ -156,9 +144,9 @@ horizontalVelocity = Min(horizontalVelocity, 276)
 
 官方 GOKZ `TweakJump` 只在 `player.HitPerf` 为真时，把起跳前水平速度限制到 380 HU/s。它不是普通空气速度的全局上限，也不是每个 tick 的最终速度限制。
 
-#### Perf 的判定不是简单的“刚刚落地”
+#### Perf 的 MovementAPI 判定目前无法从随附源码确认
 
-MovementAPI 的核心判断是：跳跃发生时，上一 tick 没有执行 `WalkMove`，并且不是梯子跳。当前 Unity 实现使用 `_landedThisTick` 代替，这不是同一个状态机。
+本地 `gokz-mode-kztimer.sp` 在 `Movement_OnJumpPre` 调用 `TweakJump`，并由 `player.HitPerf` 决定是否应用 380 HU/s 起跳速度上限；`Movement_OnJumpPost` 再保存 `HitPerf` 与 `TakeoffSpeed`。本项目没有 MovementAPI 实现，因此 `_landedThisTick` 只能标注为 Unity 近似，不能声称等同于 GOKZ 的 HitPerf 状态机。
 
 ---
 
@@ -169,11 +157,11 @@ MovementAPI 的核心判断是：跳跃发生时，上一 tick 没有执行 `Wal
 | 文件 | 作用 | 当前状态 |
 |---|---|---|
 | [SurfCharacter.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/SurfCharacter.cs) | `LZM`，输入、事件、视角、旧控制器和新控制器的总入口 | 仍然承载大量项目逻辑，需要谨慎拆分 |
-| [SurfController.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/SurfController.cs) | 保留旧运动路径，同时调用 `SourceMovementCore` | 旧逻辑保留；新路径仍是适配器 |
-| [GokzKzTimerMovement.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/GokzKzTimerMovement.cs) | 当前所谓 GOKZ 核心移动控制器 | 公式部分有来源，状态机和碰撞不完整 |
-| [MoveData.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/MoveData.cs) | 输入、速度、碰撞、触发器和项目状态容器 | 有 `Buttons/OldButtons` 字段，但当前没有真正按 Source usercmd 使用 |
+| [SurfController.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/SurfController.cs) | 保留旧运动路径，同时调用 `SourceMovementCore` | KZTimer 路径从 `SurfCharacter.FixedUpdate` 进入；旧逻辑仍保留 |
+| [GokzKzTimerMovement.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/GokzKzTimerMovement.cs) | 128 Hz Source/GOKZ 运动适配核心 | 已包含移动、盒体扫掠/多平面裁剪、蹲、涉水、梯子、坡面和触发器分支；Unity 碰撞和缺少 MovementAPI runtime 仍使其不能宣称逐 tick 完全一致 |
+| [MoveData.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/MoveData.cs) | 输入、速度、碰撞、触发器和项目状态容器 | 当前/旧按键已使用 CS:GO `in_buttons.h` 位；前/侧/上 move 值已分开保存，但没有完整的 `CUserCmd` 元数据 |
 | [GokzModeSettings.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/GokzModeSettings.cs) | Vanilla/SimpleKZ/KzTimer 参数 | KzTimer 数值大部分正确 |
-| [GokzMovementRules.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/GokzMovementRules.cs) | 摩擦、加速、空气加速和 Perf 公式 | 基础数学测试通过，但不代表完整行为一致 |
+| [GokzMovementRules.cs](E:/Ridah/Unity/Projects/LUO/Assets/Ridah/RidahFPS/Movement/GokzMovementRules.cs) | 摩擦、加速、空气加速和速度换算 | 公式可静态对照；本轮没有执行测试或运行时验证 |
 
 ### 4.2 周边功能
 
@@ -202,36 +190,21 @@ MovementAPI 的核心判断是：跳跃发生时，上一 tick 没有执行 `Wal
 8. 128 Hz 固定更新路径已经接入。
 9. 空间滚轮上滑可以设置跳跃请求。
 10. 失重、反向重力、梯子、水体、触发器和旧控制器没有被删除，仍需作为项目适配层继续维护。
-11. 基础公式和碰撞测试当前可以通过，但这些测试不能证明与真实 CS:GO/GOKZ 逐 tick 一致。
+11. 项目中存在公式与碰撞 EditMode 测试文件；本轮没有运行测试或编译，历史测试记录不能代替当前验证。
 
 ---
 
 ## 6. 当前已知问题
 
-### P0：必须优先解决，否则不能声称是 GOKZ
+### 6.1 当前核心差异与验证边界
 
-#### P0-1：Perf 状态机错误
+#### MovementAPI Perf 状态
 
-当前代码：
+KZTimer 的 `TweakJump` 依据 MovementAPI 的 `HitPerf` 执行 380 HU/s 起跳速度处理。Unity 代码以本地落地 tick 状态估算 Perf；由于仓库没有 MovementAPI runtime，实现是否一致尚无依据。不得把 `_landedThisTick` 或任何推测写成 MovementAPI 源码逻辑。
 
-```csharp
-ApplyJump(_landedThisTick && !_wasOnLadder);
-```
+#### Source UserCmd 输入模型
 
-问题：官方使用 `OldWalkMoved`，当前使用“上一 tick 是否落地”。这会影响 Perf、380 上限、TakeoffSpeed 和 HUD。
-
-必须做法：实现明确的 Source/MovementAPI 状态：
-
-- 当前 tick 是否执行 `WalkMove`；
-- 上一个 tick 是否执行 `WalkMove`；
-- 当前 tick 的 landing/takeoff；
-- 当前 tick 的 cmdnum/tickcount；
-- 梯子离开状态；
-- jumpbug/duckbug/edgebug 状态。
-
-#### P0-2：没有真正的 Source UserCmd
-
-当前输入主要在 Unity `Update()` 读取，在 `FixedUpdate()` 消费。Source 则围绕每个 usercmd 维护：
+当前输入在 Unity `Update()` 读取、在 128 Hz `FixedUpdate()` 消费，并将滚轮/按键跳跃请求锁存到单个 tick。Source 则围绕每个 usercmd 维护：
 
 - `m_nButtons`；
 - `m_nOldButtons`；
@@ -243,43 +216,30 @@ ApplyJump(_landedThisTick && !_wasOnLadder);
 - 视角变化；
 - 按键边沿。
 
-当前 `MoveData.Buttons` 与 `OldButtons` 没有真正参与移动逻辑，无法保证跳跃、下蹲、预加速和 Perf 与 Source 同步。
+活动运动链已经把移动相关按键映射到本地 CS:GO `in_buttons.h` 位，并维护 `Buttons`/`OldButtons`：GOKZ `OnPlayerRunCmd` 钩子在 `CheckParameters` 前读取当前输入，`FinishMove` 对应边界更新 Source 旧按键；跳跃防连跳和 raw duck 边沿据此处理。前进/侧移命令也以 450 HU/s 的 Source 客户端命令速度生成。
 
-#### P0-3：下蹲状态机是自定义近似
+这仍不是完整 `CUserCmd`：Unity `Update()` 采样输入再由 128 Hz `FixedUpdate()` 消费，没有 Source 的 cmdnum、tickcount、随机种子、mouse delta、完整角度/按钮集，也不能保证渲染帧与 movement command 的采样完全相同。因此 MovementAPI Perf 和多输入更新合并仍不能宣称与原引擎一致。
 
-必须重新实现或明确模拟：
+#### CS:GO Duck 状态
 
-- Duck/Unduck 的状态和计时；
-- `m_flDuckAmount`；
-- `m_bDucked`；
-- `m_bDucking`；
-- 地面与空中的不同起身规则；
-- Ceiling blocked；
-- 刚落地完全下蹲时的 `CanUnduck` 规则；
-- duck speed crop；
-- displacement stuck 修复；
-- Crouch jump bind 移除。
+活动实现已经映射连续 `m_flDuckAmount`、`m_flDuckSpeed` 恢复、空中立即切换 hull、eye spline、CanUnduck、9 HU 空中 origin 偏移、蹲速裁剪及 GOKZ 的落地 CanUnduck/按键 hook。仍需谨慎核对状态边缘：Unity 的 hull overlap/扫掠不能复刻 Source `TracePlayerBBox`，本轮没有运行时跳蹲轨迹可比对。不要把这部分误写成“尚未实现”，也不要声称已经验证完全相同。
 
-不能继续使用未经源码验证的 `MoveTowards`、`0.8f`、自定义恢复距离和自定义 spam penalty 作为最终实现。
+#### Source TracePlayerBBox 碰撞差异
 
-#### P0-4：碰撞不是 Source TracePlayerBBox
+活动实现已包含 8 bump 的 GOKZ momsurffix 路径、最多 5 个裁剪面、StepMove、StayOnGround、地面分类、斜坡重试、端点穿透探测和 Unity BoxCollider。GOKZ `SlopeFix` 的专用扫掠现按 `MASK_PLAYERSOLID_BRUSHONLY` 语义过滤 `Player`/`Enemy` 标签；其他 movement trace 仍是 Unity 物理查询，不能自动等同于 Source：
 
-当前 Unity `BoxCast` 能够实现“盒体碰撞”，但不能自动等同于 Source：
-
-- bump 次数不同；
-- `startsolid/allsolid` 处理不同；
-- trace fraction 不同；
-- trace mask 不同；
-- Source brush-only 检测缺失；
+- PhysX `startsolid/allsolid` 与 Source trace 的定义不同；
+- Unity query hull 的 skin 与 Source hull trace fraction 需要换算；
+- Unity layer/tag 过滤不能完整表达 Source contents mask 与 `playerclip`；
 - touch list 缺失；
 - edge/distbug/edgebug 状态缺失；
-- 步进和斜坡行为不完全一致。
+- 步进、斜坡三角面及移动 Rigidbody 的接触行为不完全一致。
 
-需要独立的 `SourceTraceAdapter` 和可测试的 `TryPlayerMove/StepMove/CategorizePosition` 实现，而不是继续在 `SourceMovementCore` 中堆叠 Unity 查询特例。
+继续修改时先维护活动适配器中的调用顺序与 trace 映射，不要再并行造第二套运动控制器。
 
-#### P0-5：276 与 380 不能只看数值
+#### 276 与 380 的运行结果
 
-当前的常量和基础公式虽然基本正确，但由于 Perf、Grounded、WalkMoved、输入边沿和碰撞状态不一致，以下现象仍然可能出现：
+源码中 276 来自 `250 × PRE_VELMOD_MAX(1.104)` 的最大期望速度路径；380 只在 `HitPerf` 时由 KZTimer `TweakJump` 处理起跳速度。活动 Unity 代码按 Source `WalkMove` 的 wish-speed 和地速裁剪路径实现相关运算，但 Perf 状态仍是近似。没有逐 tick 参考轨迹前，不能仅凭 HUD 或常数声称实测一致：
 
 - 平地行走超过预期 276；
 - 非 Perf 的起跳速度状态被错误识别；
@@ -289,17 +249,14 @@ ApplyJump(_landedThisTick && !_wasOnLadder);
 
 不得通过无源码依据的最终 `Clamp` 掩盖这些问题。
 
-### P1：核心行为完成后解决
+### 6.2 仍需继续核验
 
-1. 落地斜坡的 `SlopeFix` 需要基于 Source 的 landing velocity 和 trace plane。
-2. 需要补齐 edge/distbug/jumpbug/duckbug。
-3. 需要补齐移动平台/base velocity 语义。
-4. 需要补齐水体的 `CheckWater/WaterJump/WaterMove` 状态。
-5. 需要处理动态 Unity Rigidbody 与静态碰撞体的差异。
-6. 需要让 HUD 使用 tick/cmd 状态，而不是依赖普通渲染帧采样。
-7. JumpStats 需要支持完整跳跃类型、落地速度、空中时间、strafe 和 bug 状态。
+1. Unity `Physics.BoxCast` 对复杂 Mesh、贴角、穿透恢复和 moving Rigidbody 的结果需要实测与 Source trace 对照。
+2. MovementAPI runtime 未随项目提供，`HitPerf`、完整 landing/takeoff 与 bug 事件不能由现有本地文件完全核实。
+3. HUD 与 jumpstats 的事件/采样节奏仍需确认是否按 movement tick 更新。
+4. 水体、梯子、坡面、移动平台及 LUO 的失重/反向重力扩展需分别验证；后三项不是 KZTimer 的原生规则。
 
-### P2：外围功能和完整 GOKZ 模块
+### 6.3 外围功能和完整 GOKZ 模块
 
 以下功能目前是 Unity 替代实现或缺失，不应宣称为官方 GOKZ 完整移植：
 
@@ -315,15 +272,15 @@ ApplyJump(_landedThisTick && !_wasOnLadder);
 
 ---
 
-## 7. 当前测试的问题
+## 7. 测试覆盖状态
 
-当前 EditMode 测试全部通过，但测试本身不足以证明源码一致性。
+本轮只做静态代码与本地源码对照，没有运行 Unity、编译或测试。项目存在 EditMode 测试文件，但本交接文档中旧的“测试通过”记录属于历史状态，不代表当前工作区结果。
 
 已确认的测试问题：
 
 1. 测试主要验证直线前进和基础公式，没有验证 W+A/D 预加速全过程。
 2. 没有验证真实 cmdnum/tickcount 和输入边沿。
-3. 没有验证 MovementAPI 的 `OldWalkMoved` Perf 判定。
+3. 没有验证 MovementAPI 的 `HitPerf` 判定；随附文件只有接口声明，缺少判定实现。
 4. 没有验证 edgebug、distbug、jumpbug、duckbug。
 5. 没有验证真实 Source TracePlayerBBox 的 startsolid/allsolid 行为。
 6. 测试把“下蹲落地后仍保留较高水平速度”写成了预期，这只是当前项目的假设，不是源码证明。
@@ -593,7 +550,7 @@ Unity BoxCast 只是底层查询实现，不应直接承担 Source 状态语义�
 项目目标是在 Unity 6.6 中逐 tick 复现 KZGlobalTeam/gokz 的 KZTimer 运动模式，同时保留 LUO 原有角色、事件、武器、Spawn、传送、失重和反向重力功能。参考必须包括：
 
 1. GOKZ 官方 gokz-mode-kztimer.sp；
-2. danzayau/MovementAPI；
+2. 项目随附的 MovementAPI 文件（目前只有 `movementapi.inc` 声明；不得猜测缺失实现的行为）；
 3. 本地 `ThirdParty/cstrike15_src-master` 中的 `cs_gamemovement.cpp` 及其实际调用的同仓库基类实现；
 4. 当前项目实际代码，而不是只看注释。
 
@@ -624,16 +581,14 @@ Unity BoxCast 只是底层查询实现，不应直接承担 Source 状态语义�
 
 ## 12. 当前结论
 
-当前项目已经完成了“把部分 GOKZ/KZTimer 参数和基础公式接入 Unity”的阶段，但尚未完成“Source 调用顺序 + MovementAPI 状态机 + CS:GO 下蹲 + Source 碰撞语义”的完整移植。
+当前项目的活动运动路径已经包含较多 CS:GO/GOKZ 调用阶段与状态映射，但它仍是 Unity 适配，不能称作完整逐行移植或逐 tick 等同。当前继续工作的重点是：
 
-接下来的工作重点不是继续猜参数，而是：
-
-1. 建立准确的 Source usercmd/state 层；
-2. 修正 MovementAPI 的 Perf/landing/takeoff 状态；
-3. 重做 Duck/Unduck；
-4. 重做 Source trace/collision 适配器；
-5. 通过逐 tick 参考数据验证 276、380、摩擦、落地、下蹲和碰撞；
-6. 最后再把 LUO 的失重、反向重力和其他事件接回去。
+1. 补齐 MovementAPI 实现参考或以真实 GOKZ/CS:GO tick 轨迹确定 Perf 状态；
+2. 维护 Unity usercmd 输入与 Source 按键边沿的映射；
+3. 继续按 CS:GO Duck 与 GOKZ detour 核验蹲起边缘情况；
+4. 逐项核对 BoxCast 与 Source trace 在角落、贴地、台阶、斜坡及穿透时的分歧；
+5. 用相同 128 tick 输入序列验证地速、380 Perf 起跳、摩擦、落地、蹲和碰撞；
+6. 将 LUO 失重、反向重力及事件功能作为独立扩展验证。
 
 ---
 
@@ -678,7 +633,9 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 
 ### 13.3 本次 Unity 工作副本修改
 
-以下文件目前是 SVN 工作副本中的 `M` 状态，尚未提交：
+以下清单和“空中保持视角高度”的描述是 2026-11-13 的历史快照，不是当前工作区状态。后续对照本地 `cs_gamemovement.cpp::FinishDuck` 确认：空中完成蹲下时会把 origin 上移 9 HU，并把 view offset 设为 46 HU；旧记录中的“眼睛高度保持空中蹲之前的状态”不符合指定源码，已由后续运动核心修订取代。此处仅保留历史，不能作为当前实现或行为说明。
+
+以下文件当时处于 SVN 工作副本 `M` 状态；该历史清单不代表当前 Git/SVN 状态：
 
 - `Assets/Ridah/RidahFPS/Movement/GokzKzTimerMovement.cs`
 - `Assets/Ridah/RidahFPS/Movement/GokzKzTimerMovementCompatibility.cs`
@@ -688,15 +645,17 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 
 本次修改内容：
 
-1. 在 `SourceMovementCore` 中增加独立的 `EyeDuckAmount`，不再直接用物理 `_duckAmount` 驱动摄像机；
-2. 空中按蹲时，`GokzSourceHull` 可以切换到 54HU 碰撞盒，但眼睛高度保持空中蹲之前的状态；
-3. 地面 tick 才推进视角蹲起表现；
+1. 当时在 `SourceMovementCore` 中增加独立的 `EyeDuckAmount`；
+2. 当时采用了空中不变更眼睛高度的适配；该做法随后经 CS:GO 源码对照确认不正确，并已修正；
+3. 当时仅地面 tick 推进视角蹲起表现；该结论也不再代表当前代码；
 4. `SurfCharacter.UpdateGoKzViewHeight` 改为读取 `GokzEyeDuckAmount`；
 5. 增加 `AirborneDuckChangesPhysicalHullWithoutChangingEyeAmount` 测试。
 
-这是一层 Unity 适配逻辑，不能标记为“完整的 `CCSGameMovement::Duck` 源码移植”。它依据 GOKZ 源码中物理蹲状态与 Hook 边界，以及用户提供的 CS:GO 实际表现；仍需使用真实 CS:GO/GOKZ 逐 tick 数据验证。
+这是一段已被后续修改取代的 Unity 适配逻辑，不能据此判断当前蹲实现。当前已按本地 CS:GO `Duck`、`FinishDuck`、`FinishUnDuck`、`CanUnduck` 路径核对状态与调用顺序；Unity hull query 仍不等同于 Source trace，MovementAPI runtime 也未随仓库提供。
 
 ### 13.4 编译和测试结果
+
+以下是 2026-11-13 的历史记录，不能作为当前代码的编译/测试证据：
 
 - Unity Editor：`6000.6.8f1`；
 - Editor 连接状态：ready，Pipeline 端口 `7800`；
@@ -755,7 +714,7 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 ### 15.2 本次按源码修正
 
 1. `gokz-momsurffix.sp` 的完整位移扫掠在全程移动后做独立终点 hull trace。若第一 bump 的终点落入实体，进入 ramp 重试；若之后的 grounded bump 仍落入实体，则把速度归零并退出。Unity 适配此前把这两种情况都送入 ramp 重试，现已按该分支区分。
-2. `gokz-momsurffix.sp::IsValidMovementTrace` 只判当前 trace 的 startsolid/allsolid，以及零 fraction 的指定非 walkable plane；终点实体检查属于后续的 fraction=1 分支。Unity 适配已移除混在该函数里的终点检查，并使用原始扫掠 fraction 做 plane 判定。
+2. `gokz-momsurffix.sp::IsValidMovementTrace` 检查 startsolid/allsolid、零 fraction 的指定非 walkable plane、法线范围，以及 `tr.endpos` 的静态 hull trace；`TryPlayerMove` 另有完整位移终点检查。Unity 适配分别保留 ramp trace 终点探测和完整位移终点处理。
 3. GOKZ 的 `TryPlayerMove` 替换实现没有基础 `CGameMovement::TryPlayerMove` 的 `MINIMUM_MOVE_FRACTION` 截断；活动实现已移除这条额外截断。
 4. CS:GO `CreateStuckTable` 的大偏移组合按 Z、X、Y 循环生成。Unity 适配之前按 X、Y、Z 生成，现已调整为源码顺序，以保持每次卡住重试的偏移序列一致。
 5. CS:GO `CGameMovement::CheckWater` 在每次 `PlayerMove` 采样水位；LUO 原先只在 render `Update` 更新水位。GOKZ 活动路径现于每个 128 Hz 固定 tick 重算触发器状态和水位，并移除仅比较触发器数量的缓存判断，避免数量不变但对象更换时沿用旧状态。
@@ -768,4 +727,60 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 - 失重、反向重力与 Unity Rigidbody/Trigger 交互是 LUO/Unity 适配扩展，不是 KZTimer 的原生 CS:GO 运动规则。
 - 本次没有启动 Unity/游戏，没有运行测试或编译；尚未得到引擎编译结果或玩家实测结果。
 - `Assets/Ridah/RidahWeapon/Weapon/Portal/Scripts/Rotater.cs` 及其 `.meta` 是既有未跟踪文件，与运动审计无关，本次未修改。
+
+## 16. 2026-11-18 活动运动链逐项核对与修正
+
+### 16.1 核对依据
+
+- CS:GO 引擎依据始终是项目本地 `ThirdParty/cstrike15_src-master`，主要是 `game/shared/cstrike15/cs_gamemovement.cpp` 和它调用的 `game/shared/gamemovement.cpp`。
+- GOKZ 依据是项目本地 `ThirdParty/gokz-master`，主要是 `gokz-mode-kztimer.sp`、`gokz-momsurffix.sp` 和随附 `movementapi.inc`。
+- 核对入口 `SurfCharacter.FixedUpdate/UpdateMovement -> SurfController.ProcessGoKzMovement -> SourceMovementCore.Process/Move/Finish`，以及 `MoveData`、规则公式、输入、碰撞、蹲、水、梯子、地面和移动体积代码。
+
+### 16.2 已修正的源码时序差异
+
+1. `SurfCharacter.UpdateMovement` 原先在 `ProcessMovement` 之后才启用 Source 盒体，导致首个 tick 的落地分类和蹲状态更新在碰撞适配未就绪时执行。现在先启用/禁用对应碰撞路径，再进入运动处理；核心也只在碰撞体就绪后锁定初始地面状态。
+2. Source 优化移动的初始分类条件还包括当前 movetype 不是 `MOVETYPE_WALK`。Unity 适配现在会对上一 tick 的梯子状态重新分类；正常行走时仍按 `m_bGameCodeMovedPlayer` 与 `sv_optimizedmovement` 默认路径处理。
+3. Source 优化分支清地条件是 `mv->m_vecVelocity.z > 250 HU/s`，不是相对地面速度。Unity 适配改为直接比较沿当前 up 方向的速度；`CategorizePosition` 的独立 140 HU/s 地面相对速度判断仍保留。
+4. `CGameMovement::WalkMove` 在直线 trace 无阻挡时调用 `StayOnGround`，在阻挡并执行 `StepMove` 后也调用。活动适配之前只在无碰撞路径执行；现在两个路径都会执行，低于 1 HU/s 的早退仍不 snap。
+5. Unity sweep 采用缩小 `CollisionSkin` 的查询盒。映射到 Source 全尺寸 hull trace 时，扫掠距离、fraction 与 trace end position 需要扣回这一 skin；当前实现据此计算安全距离，避免把缩小后的查询盒误当作 Source 原尺寸 hull。
+6. CS:GO 在地面摩擦之后、WalkMove/AirMove 加速之前执行一次 `CheckVelocity`，并在普通 FullWalkMove 的移动与地面分类之后、`FinishGravity` 之前再次检查。Unity 适配将检查放到对应阶段；水游、梯子及活动 water-jump 分支保持各自 Source 调用路径。
+7. `FinishDuck`/`FinishUnDuck` 都会重新分类地面。活动代码之前在重新分类失败时保留旧 grounded 状态；现在会同步清除旧 ground hit、表面状态和 `MoveData` 地面标记。
+8. 起身可容纳检测之前把 hull 整体缩小 2% 并额外抬高查询中心；现在改用 32×32×目标高度的 Source 盒体尺寸，只保留与其他 sweep 相同的 Unity collision skin。
+9. `FullWalkMove` 根据进入该 tick 时的水位选择游泳或普通行走分支。Unity 适配现在保存本 tick 实际选择的分支，再决定是否执行 `CheckVelocity`/`FinishGravity`，不再用移动后的水位反推调用路径。
+10. 输入状态现使用本地 `in_buttons.h` 的移动相关位，并把 `Buttons`/`OldButtons` 接入 GOKZ hook 与 `CheckJumpButton`；`OldButtons` 在 normal/CheckStuck 退出路径都按 `FinishMove` 边界更新。它仍不是完整 `CUserCmd`。
+11. `gokz-mode-kztimer.sp::SlopeFix` 的 clip helper 现按其实际循环处理两个水平轴，并清零垂直分量；没有再套用完整三维 Source `ClipVelocity`。Unity XZ 水平面映射 GOKZ 的 Source XY。
+12. CS:GO 梯子逻辑在跳跃保护窗口内不会按方向重新计算攀爬速度；活动适配现在在 0.2 秒保护期内保留梯子速度，到期才按源码以 270 HU/s 蹬离。
+13. `CGameMovement::GetCheckInterval(STUCK)` 的普通检查间隔按多玩家 Source 默认 1 秒处理；已有偏移重试时逐 movement command 尝试，并保留 0.05 秒的尝试节流。Unity 没有 Source `entindex`，所以只能匹配间隔，无法匹配 `(cmdnum + entindex)` 的相位。
+14. `SlopeFix` 现在用单独的 brush-only 近似过滤：保留世界/可移动几何，跳过项目 `Player`/`Enemy` 标签；Source `CONTENTS_*` 和 Unity layer/tag 仍不是一一对应。
+
+### 16.3 仍需保留的限制
+
+- GOKZ 的 380 处理确实只在 `HitPerf` 时触发；当前 Unity Perf 判定仍是 `_landedThisTick` 近似。项目未包含 MovementAPI runtime，不能依据 `movementapi.inc` 宣称两者相同。
+- Unity BoxCast/Overlap/ComputePenetration 仍不能复现 Source trace 的实体过滤、面片选择、startsolid/allsolid 与原生地形精度；本轮只校正能够由源码直接确认的调用条件和几何换算。
+- `SlopeFix` 的 Unity brush-only 映射目前只能按 LUO 的 `Player`/`Enemy` 标签过滤，未覆盖 Source `playerclip` contents 与所有自定义实体类别。
+- 本轮未启动 Unity/游戏、未编译、未运行测试，也没有角色实测结果。修改后的 Unity 行为仍需在项目内验证。
+
+## 17. 2026-11-18 全运动调用链继续审计
+
+### 17.1 本轮唯一参考
+
+- GOKZ 规则仍只以本地 `ThirdParty/gokz-master` 为准；CS:GO 引擎移动调用以本地 `ThirdParty/cstrike15_src-master/game/shared/cstrike15/cs_gamemovement.cpp` 及其实际调用的同仓库 `game/shared/gamemovement.cpp` 为准。
+- 本地 GOKZ `gokz-mode-kztimer.sp::SlopeFix` 注释写明它的一个小型 `ClipVelocity` helper 历史上参考过 SDK 2013；这只是 GOKZ 插件自身的来源注释，不是 LUO 的 CS:GO 引擎移动依据。本轮移植的是 GOKZ 文件里的水平分量计算。
+- `movementapi.inc` 仍然只有接口声明，没有 MovementAPI runtime；Perf 内部判定和精确事件时序不能从当前项目文件证实。
+
+### 17.2 本轮代码修改
+
+- `GokzKzTimerMovement.ApplySlopeFix` 之前用普通最近命中查询选坡面，可能把玩家/NPC Collider 作为 GOKZ 的 brush-only 斜坡。现在单独过滤 `Player`、`Enemy` 标签，并保留世界和 movable 几何；这是对 `MASK_PLAYERSOLID_BRUSHONLY` 与 GOKZ trace filter 的项目映射。
+- 修订了本文件中已过时的输入位字段说明：当前运动相关 Source button 位和 `OldButtons` 已接入活动链；完整 `CUserCmd` 与 Unity 输入采样仍有差异。
+- 将 2026-11-13 空中蹲眼高实现明确标为历史错误做法；当前代码依本地 CS:GO `FinishDuck` 同命令的 9 HU origin 偏移和 46 HU view offset 处理。
+- 修正 `GokzSurfaceProperties` 对 Ice 预设的注释：本地泄漏源码有 `surfacegameprops_t`/`surfacedata_t` 字段定义，但项目未带 CS:GO 的 shipped surface-property data table；`0.05` 是 LUO Unity 映射值，不能当成 CS:GO 官方 Ice friction 数据。
+- 复核 `GokzModeSettings` 的 KZTimer 参数表以及 `GokzMovementRules` 的地面加速、空气加速和摩擦公式：与本地 `gokz-mode-kztimer.sp`、`CCSGameMovement::Accelerate` 及其调用的 `CGameMovement` 公式相符；本轮未改这些公式。`PRE_VELMOD_MAX` 和 `PERF_SPEED_CAP` 仍分别只用于 KZTimer prestrafe max-speed hook 与 `HitPerf` 的跳前水平速度修正。
+- `GokzPortManifest` 增补 `ProcessMovement/PlayerMove/CheckParameters` 与 `CheckStuck` 审计项，并明确 Perf 状态依赖仓库缺失的 MovementAPI runtime。
+
+### 17.3 未验证边界
+
+- Unity 物理查询依然不能实现 Source contents mask、brush/playerclip 分类和原生 trace 语义；本轮只修正了可由当前项目标签映射的 `SlopeFix` 玩家/NPC 排除。
+- `GokzSurfacePreset.Ice` 的 `0.05` 仍是 LUO 可配置映射值；真实 CS:GO material surface 数据不在当前本地源码包中，不能据此宣称该预设的摩擦数值与游戏相同。
+- 运动规则、参数和调用阶段做了静态源码核对；按用户要求没有启动 Unity/游戏，没有构建或运行测试，也没有声称运行时行为已验证。
+- 本轮仍未得到 MovementAPI runtime 或真实 CS:GO/GOKZ 逐 tick 参考轨迹；不能宣称 Perf 状态和所有碰撞边界完全相同。
 

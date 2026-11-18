@@ -40,6 +40,8 @@ namespace RidahFPS.Controllers
         // update. The 128-tick movement solver consumes it once per tick.
         public float ViewYawDelta;
         public Vector3 Velocity;
+        // Source in_buttons.h bit positions. OldButtons is advanced by the
+        // movement adapter at the same boundary as CGameMovement::FinishMove.
         public int Buttons;
         public int OldButtons;
         public float ForwardMove;
@@ -118,6 +120,11 @@ namespace RidahFPS.Controllers
 
         public float reverseGravity = 1f;
         public bool grounded = false;
+        // Mirrors CMoveData::m_bGameCodeMovedPlayer. Set when project code
+        // teleports or otherwise repositions the root between movement ticks;
+        // CS:GO uses this flag to decide whether to recategorize ground at
+        // the start of PlayerMove when optimized movement is enabled.
+        public bool gameCodeMovedPlayer = false;
         public float airAccel = 1500;
 
         public float scale = 1;

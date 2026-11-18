@@ -58,6 +58,7 @@ namespace RidahFPS.Controllers
         private const float StepHeight = 18f * UnitScale;
         private const float SourceStepEpsilon = 0.03125f * UnitScale;
         private const float CollisionSkin = 0.001f;
+        private const float SourceDistanceEpsilon = 0.03125f * UnitScale;
         private const float SourcePlaneEpsilon = 1.1920929e-7f;
         private const float SourceStaminaRange = 100f;
 
@@ -118,10 +119,9 @@ namespace RidahFPS.Controllers
         private bool _isCrouched;
         private bool _ducking;
         private float _duckAmount;
-        // GOKZ changes the Source duck state through movement hooks, but it
-        // does not drive the first-person eye from m_bDucked. Keep the eye
-        // presentation separate from the physical hull so an airborne duck
-        // can crouch the lower collision box without moving the view.
+        // Track CS:GO's eye offset separately from the collision hull. The
+        // Source FinishDuck/FinishUnDuck transitions update both, but their
+        // timing differs while the player is airborne.
         private float _eyeDuckAmount;
         private float _duckSpeed = DuckSpeedNormal;
         private Vector3 _lastFullDuckSpeedPosition;
@@ -143,23 +143,21 @@ namespace RidahFPS.Controllers
         private int _landingTick = -1;
         private int _lastJumpRequestTick = int.MinValue;
         private bool _hullInitialized;
+        private bool _groundStateInitialized;
         private bool _wasCrouching;
         private bool _wasJumping;
         private bool _wasJumpHeld;
-        // Source m_nOldButtons contains the previous command's IN_JUMP bit,
-        // including one-tick mouse-wheel jump pulses. Keeping only the
-        // physical key-held state loses that bit for consecutive wheel
-        // commands and can allow a second jump that Source rejects.
-        private bool _oldJumpButton;
-        // SourceMod stores its own previous command buttons in OnPlayerRunCmd;
-        // keep that history separate because Source FinishMove updates
-        // m_nOldButtons even when PlayerMove exits from CheckStuck.
-        private bool _gokzOldJumpButton;
+        // Source FinishMove button history and GOKZ OnPlayerRunCmd history
+        // are separate: CheckStuck exits still update the former, while the
+        // GOKZ command snapshot is captured before CCSGameMovement mutates
+        // the effective duck bit.
+        private int _gokzOldButtons;
         private bool _previousWalkMoved;
         private bool _walkMovedThisTick;
         private bool _hasWalkMovedSinceLastJump;
         private bool _onLadderThisTick;
         private bool _wasOnLadder;
+        private bool _waterMoveBranchThisTick;
         private float _ladderJumpBlockedUntil;
         private float _waterJumpTimeMilliseconds;
         private Vector3 _waterJumpVelocity;
@@ -379,9 +377,9 @@ namespace RidahFPS.Controllers
                 }
             }
 
-            // CS:GO WalkMove calls StayOnGround only after a nontrivial walk
-            // move. WaterMove, LadderMove, and the sub-1 HU early return do
-            // not run this snap.
+            // CGameMovement::WalkMove calls StayOnGround after either a clear
+            // direct trace or the StepMove path. WaterMove/LadderMove and its
+            // sub-1 HU early return do not run this snap.
             if (_walkMovedThisTick && startVelocity.magnitude >= UnitScale)
                 StayOnGround(ref bestPosition, halfExtents);
 
@@ -504,13 +502,22 @@ namespace RidahFPS.Controllers
                 RaycastHit nearest;
                 bool hit = TryGetNearestHit(hitCount, out nearest);
                 Vector3 endPosition = position + velocity * timeLeft;
-                float traceFraction = hit
-                    ? Mathf.Clamp01(nearest.distance / distance)
-                    : 1f;
+                // Unity casts use a slightly inset hull. Their contact point
+                // is therefore one skin farther along the path than the
+                // equivalent full Source hull trace. Convert back to Source's
+                // full-hull travel distance before advancing or clipping.
                 float safeDistance = hit
-                    ? Mathf.Clamp(nearest.distance - CollisionSkin, 0f, distance)
+                    ? Mathf.Clamp(
+                        nearest.distance - CollisionSkin,
+                        0f,
+                        distance)
                     : distance;
-                float fraction = distance > 0f ? safeDistance / distance : 0f;
+                float fraction = distance > 0f
+                    ? safeDistance / distance
+                    : 0f;
+                Vector3 traceEndPosition = hit
+                    ? position + direction * safeDistance
+                    : endPosition;
 
                 // gokz-momsurffix treats a later invalid airborne trace as a
                 // ramp precision failure. It retries from a nudged origin and
@@ -520,7 +527,8 @@ namespace RidahFPS.Controllers
                         position,
                         halfExtents,
                         nearest,
-                        traceFraction))
+                        traceEndPosition,
+                        fraction))
                 {
                     lastTracePlane = nearest.normal.normalized;
                     hasValidPlane = false;
@@ -528,10 +536,10 @@ namespace RidahFPS.Controllers
                     continue;
                 }
 
-                if (!hit)
+                if (!hit || fraction >= 1f - SourcePlaneEpsilon)
                 {
                     if ((bump == 0 || Grounded) &&
-                        IsHullStuckAt(endPosition, halfExtents))
+                        IsHullStuckAt(traceEndPosition, halfExtents))
                     {
                         hasValidPlane = false;
                         if (bump == 0)
@@ -548,8 +556,8 @@ namespace RidahFPS.Controllers
                         break;
                     }
 
-                    allFraction += 1f;
-                    position = endPosition;
+                    allFraction += fraction;
+                    position = traceEndPosition;
                     break;
                 }
 
@@ -575,7 +583,7 @@ namespace RidahFPS.Controllers
 
                 // A hit at the end of the trace means the whole displacement
                 // was covered. There is no remaining time to clip.
-                if (fraction >= 0.999999f)
+                if (fraction >= 1f - SourcePlaneEpsilon)
                     break;
 
                 timeLeft -= timeLeft * fraction;
@@ -678,6 +686,7 @@ namespace RidahFPS.Controllers
             Vector3 startPosition,
             Vector3 halfExtents,
             RaycastHit hit,
+            Vector3 traceEndPosition,
             float fraction)
         {
             if (IsHullStuckAt(startPosition, halfExtents))
@@ -685,18 +694,22 @@ namespace RidahFPS.Controllers
 
             Vector3 normal = hit.normal.normalized;
             float vertical = Vector3.Dot(normal, _movementUp);
-            bool sourceZPlane = Mathf.Abs(vertical) >=
-                Mathf.Max(
-                    Mathf.Abs(Vector3.Dot(normal, Vector3.right)),
-                    Mathf.Abs(Vector3.Dot(normal, Vector3.forward)));
-            if (fraction <= SourcePlaneEpsilon && sourceZPlane &&
+            bool axisAlignedSidePlane =
+                Mathf.Abs(vertical) <= SourcePlaneEpsilon &&
+                (Mathf.Abs(Mathf.Abs(normal.x) - 1f) <= SourcePlaneEpsilon ||
+                 Mathf.Abs(Mathf.Abs(normal.z) - 1f) <= SourcePlaneEpsilon);
+            bool sourcePlaneTypeAtLeastZ = !axisAlignedSidePlane;
+            if (fraction <= SourcePlaneEpsilon &&
+                sourcePlaneTypeAtLeastZ &&
                 vertical < WalkableNormal)
                 return false;
 
-            // GOKZ's IsValidMovementTrace only checks the sweep's startsolid /
-            // allsolid state and its zero-fraction non-walkable axial plane.
-            // The separate fraction==1 endpoint probe lives in TrySlideMove.
-            return true;
+            // gokz-momsurffix::IsValidMovementTrace also performs a stationary
+            // TracePlayerBBox at tr.endpos and rejects startsolid or any
+            // incomplete stationary trace. This catches an endpoint that a
+            // swept trace reports as valid even though it leaves the hull
+            // embedded in a ramp triangle.
+            return !IsHullStuckAt(traceEndPosition, halfExtents);
         }
 
         private bool TryFindValidRampPlane(
@@ -1039,25 +1052,52 @@ namespace RidahFPS.Controllers
             // categorizing the next tick's ground state.
             ConfigureSourceHullTransform(_surfer.MoveData.playerTransform);
             Physics.SyncTransforms();
+            RefreshSourceWaterLevel();
+
+            // CS:GO's default sv_optimizedmovement path keeps the ground
+            // entity from the previous command. It only categorizes here
+            // when game code moved the player (or when initializing this
+            // Unity adapter); otherwise it merely detaches a player moving
+            // upward faster than 250 HU/s.
+            if (!_groundStateInitialized && _collisionReady)
+            {
+                Grounded = CategorizePosition(out _groundHit);
+                _groundStateInitialized = true;
+                groundAtTickStart = Grounded;
+                groundVelocityAtTickStart = Grounded
+                    ? GetGroundEntityVelocity(_groundHit)
+                    : Vector3.zero;
+                UpdateGroundEntityVelocitySample();
+            }
             // This is Source's old ground entity state, not the result of the
             // new CategorizePosition trace. Finish() uses it to distinguish a
             // real landing from a player who was already grounded.
             _startGrounded = groundAtTickStart;
             _onLadderThisTick = false;
             _waterJumpProcessedThisTick = false;
+            _waterMoveBranchThisTick = false;
             _wasOnLadder = _surfer.MoveData.climbingLadder;
             _surfer.MoveData.climbingLadder = false;
             _walkMovedThisTick = false;
+
+            int buttons = _surfer.MoveData.Buttons;
+            bool jumpButtonDown = HasSourceButton(buttons, InputButtons.Jump);
+            bool duckButtonDown = HasSourceButton(buttons, InputButtons.Duck);
 
             // GOKZ removes a newly pressed duck bind when jump is pressed on
             // the ground. Holding duck before the jump remains a real crouch
             // jump; only the tick-perfect jump+duck bind is removed.
             if (_mode != GokzMode.Vanilla && Grounded &&
-                _surfer.MoveData.wishJump &&
-                !_gokzOldJumpButton && _surfer.MoveData.crouching && !_rawDuckHeld)
+                jumpButtonDown &&
+                !HasSourceButton(_gokzOldButtons, InputButtons.Jump) &&
+                duckButtonDown &&
+                !HasSourceButton(_gokzOldButtons, InputButtons.Duck))
             {
-                _surfer.MoveData.crouching = false;
+                buttons &= ~(int)InputButtons.Duck;
+                duckButtonDown = false;
             }
+            _surfer.MoveData.Buttons = buttons;
+            _surfer.MoveData.crouching = duckButtonDown;
 
             if (!_gokzCommandInitialized)
             {
@@ -1078,7 +1118,8 @@ namespace RidahFPS.Controllers
             float realPreVelMod = UpdatePrestrafeModifier(Grounded);
             if (_mode != GokzMode.Vanilla &&
                 _surfer.MoveData.waterLevel >= GokzWaterLevel.Waist &&
-                _surfer.MoveData.crouching && !_wasCrouching)
+                duckButtonDown &&
+                !HasSourceButton(_gokzOldButtons, InputButtons.Duck))
             {
                 TryWaterCrouchBoost();
             }
@@ -1087,6 +1128,11 @@ namespace RidahFPS.Controllers
             // unduck before evaluating this command's duck state.
             if (_mode != GokzMode.Vanilla)
                 FixDisplacementStuck();
+
+            // gokz-mode-kztimer/simplekz.sp snapshots the post-plugin button
+            // command here, before CCSGameMovement::CheckParameters adds
+            // IN_RAWDUCK or suppresses the effective IN_DUCK bit.
+            _gokzOldButtons = buttons;
 
             // CCSGameMovement::CheckParameters runs before CheckStuck. It
             // saves the raw duck bit, applies the CS duck-spam gate, then
@@ -1099,8 +1145,6 @@ namespace RidahFPS.Controllers
             _gokzOldVelocity = _surfer.MoveData.Velocity;
             _wasCrouching = _rawDuckHeld;
             _wasPhysicallyCrouched = _duckedAtProcessStart;
-            _gokzOldJumpButton = _surfer.MoveData.wishJump ||
-                _surfer.MoveData.jumpHeld;
 
             // CGameMovement::CheckStuck runs after the GOKZ OnPlayerRunCmd
             // hooks and before CategorizePosition/Duck. It does not zero the
@@ -1113,7 +1157,22 @@ namespace RidahFPS.Controllers
                 return;
             }
 
-            Grounded = CategorizePosition(out _groundHit);
+            if (_collisionReady &&
+                (_wasOnLadder || _surfer.MoveData.gameCodeMovedPlayer))
+            {
+                Grounded = CategorizePosition(out _groundHit);
+                _surfer.MoveData.gameCodeMovedPlayer = false;
+            }
+            else if (_collisionReady && Grounded &&
+                Vector3.Dot(_surfer.MoveData.Velocity, _movementUp) >
+                    250f * UnitScale)
+            {
+                // CGameMovement::PlayerMove's optimized path clears the old
+                // ground entity when mv->m_vecVelocity.z exceeds 250 HU/s.
+                // The separate 140 HU/s test belongs to CategorizePosition.
+                Grounded = false;
+                _groundHit = default;
+            }
             _groundNormal = Grounded ? _groundHit.normal : _movementUp;
             _surfer.MoveData.SurfaceFriction = Grounded
                 ? GetSurfaceFriction(_groundHit)
@@ -1163,6 +1222,7 @@ namespace RidahFPS.Controllers
                 }
                 else if (_surfer.MoveData.waterLevel >= GokzWaterLevel.Waist)
                 {
+                    _waterMoveBranchThisTick = true;
                     TryWaterJump();
                     // Source checks the active water-jump timer before
                     // CheckWaterJump. A water-jump started by this call still
@@ -1181,8 +1241,6 @@ namespace RidahFPS.Controllers
                 }
             }
 
-            CheckVelocity(ref _surfer.MoveData.Velocity);
-            CheckVelocity(ref _movementVelocity);
             CheckOrigin();
             _tickStarted = true;
         }
@@ -1197,8 +1255,7 @@ namespace RidahFPS.Controllers
                 // CGameMovement::ProcessMovement still calls FinishMove after
                 // PlayerMove returns from CheckStuck, so m_nOldButtons takes
                 // this command's jump bit even when no displacement occurs.
-                _oldJumpButton = _surfer.MoveData.wishJump ||
-                    _surfer.MoveData.jumpHeld;
+                _surfer.MoveData.OldButtons = _surfer.MoveData.Buttons;
                 _surfer.MoveData.ViewYawDelta = 0f;
                 _movementBlockedThisTick = false;
                 _tickStarted = false;
@@ -1207,8 +1264,16 @@ namespace RidahFPS.Controllers
             }
 
             Physics.SyncTransforms();
-            RaycastHit finalGroundHit;
-            bool finalGrounded = CategorizePosition(out finalGroundHit);
+            RefreshSourceWaterLevel();
+            RaycastHit finalGroundHit = _groundHit;
+            // FullLadderMove and FullWalkMove's active WaterJump early return
+            // do not call CategorizePosition at their exit. Ordinary walk,
+            // air, and swimming branches do.
+            bool categorizeAtEnd = !_onLadderThisTick &&
+                !_waterJumpProcessedThisTick;
+            bool finalGrounded = categorizeAtEnd
+                ? CategorizePosition(out finalGroundHit)
+                : Grounded;
             bool landed = !_startGrounded && finalGrounded;
             if (landed)
             {
@@ -1255,8 +1320,14 @@ namespace RidahFPS.Controllers
                 : 1f;
 
             Grounded = finalGrounded;
+            if (categorizeAtEnd && !_waterMoveBranchThisTick)
+            {
+                // FullWalkMove's non-swimming branch checks velocity after
+                // movement and CategorizePosition, before FinishGravity.
+                CheckVelocity(ref _surfer.MoveData.Velocity);
+            }
             if (!_movementBlockedThisTick &&
-                _surfer.MoveData.waterLevel < GokzWaterLevel.Waist &&
+                !_waterMoveBranchThisTick &&
                 !_onLadderThisTick &&
                 !_waterJumpProcessedThisTick)
                 FinishGravity();
@@ -1265,7 +1336,8 @@ namespace RidahFPS.Controllers
             // ground categorization. This is why a player that walks off an
             // edge starts falling, while a player that remains on a floor has
             // no accumulating downward velocity.
-            if (Grounded && !_onLadderThisTick)
+            if (Grounded && !_onLadderThisTick &&
+                !_waterJumpProcessedThisTick)
                 RemoveVerticalVelocity(ref _surfer.MoveData.Velocity);
 
             // Source calls CMoveHelperServer::ProcessImpacts after
@@ -1284,8 +1356,7 @@ namespace RidahFPS.Controllers
             _wasCrouching = _rawDuckHeld;
             _wasJumping = _surfer.MoveData.wishJump;
             _wasJumpHeld = _surfer.MoveData.jumpHeld;
-            _oldJumpButton = _surfer.MoveData.wishJump ||
-                _surfer.MoveData.jumpHeld;
+            _surfer.MoveData.OldButtons = _surfer.MoveData.Buttons;
             // Keep the previous command's starting flag for the next
             // OnPlayerRunCmd-equivalent pass. This must not be the final flag
             // after Duck(), otherwise an unduck transition can never be seen
@@ -1293,8 +1364,6 @@ namespace RidahFPS.Controllers
             _wasPhysicallyCrouched = _duckedAtProcessStart;
             _previousWalkMoved = _walkMovedThisTick;
 
-            CheckVelocity(ref _surfer.MoveData.Velocity);
-            CheckVelocity(ref _movementVelocity);
             CheckOrigin();
             Speed = new Vector3(
                 Vector3.ProjectOnPlane(_surfer.MoveData.Velocity, _movementUp).x,
@@ -1322,8 +1391,7 @@ namespace RidahFPS.Controllers
             _wasCrouching = false;
             _wasJumping = false;
             _wasJumpHeld = false;
-            _oldJumpButton = false;
-            _gokzOldJumpButton = false;
+            _gokzOldButtons = 0;
             _previousWalkMoved = false;
             _walkMovedThisTick = false;
             _hasWalkMovedSinceLastJump = false;
@@ -1333,6 +1401,7 @@ namespace RidahFPS.Controllers
             _waterJumpTimeMilliseconds = 0f;
             _waterJumpVelocity = Vector3.zero;
             _waterJumpProcessedThisTick = false;
+            _waterMoveBranchThisTick = false;
             _lastGroundSurfaceMaxSpeedFactor = 1f;
             _stuckOffsetIndex = 0;
             _lastStuckCheckTime = -0.05f;
@@ -1365,6 +1434,7 @@ namespace RidahFPS.Controllers
             _landingTick = -1;
             _lastJumpRequestTick = int.MinValue;
             _hullInitialized = false;
+            _groundStateInitialized = false;
             _movementVelocity = Vector3.zero;
             _baseVelocity = Vector3.zero;
             _sourceGravityScale = 1f;
@@ -1449,8 +1519,12 @@ namespace RidahFPS.Controllers
 
         private bool CheckJumpButton()
         {
+            // Source calls CheckJumpButton whenever IN_JUMP is held. With
+            // autobhop disabled, m_nOldButtons prevents a held key from
+            // pogoing after landing; it does not suppress the first held
+            // command. wishJump also represents LUO's one-command wheel jump.
             bool jumpRequested = _surfer.MoveData.wishJump ||
-                (_settings.autoBhop && _surfer.MoveData.jumpHeld);
+                _surfer.MoveData.jumpHeld;
 
             // Source treats IN_JUMP in waist-deep water as swimming, not as a
             // normal ground jump. The button can remain held here; unlike a
@@ -1476,7 +1550,9 @@ namespace RidahFPS.Controllers
             // command contained a one-shot jump request. Holding IN_JUMP
             // through a landing must not pogo unless sv_autobunnyhopping is
             // enabled.
-            if (!_settings.autoBhop && _oldJumpButton)
+            if (!_settings.autoBhop && HasSourceButton(
+                _surfer.MoveData.OldButtons,
+                InputButtons.Jump))
                 return false;
 
             if (!_settings.enableBunnyhopping)
@@ -1544,6 +1620,11 @@ namespace RidahFPS.Controllers
             hit = default;
             if (!_collisionReady || _surfer.MoveData.playerTransform == null)
                 return false;
+
+            // CGameMovement::CategorizePosition starts by calling CheckWater.
+            // Duck completion can recategorize within PlayerMove, so water
+            // must follow the current origin and hull at each such call.
+            RefreshSourceWaterLevel();
 
             // CGameMovement::CategorizePosition refuses to attach a player
             // moving away from a surface faster than NON_JUMP_VELOCITY. This
@@ -1668,15 +1749,19 @@ namespace RidahFPS.Controllers
             if (!_collisionReady)
                 return;
 
-            bool rawDuckHeld = _surfer.MoveData.crouching;
+            int buttons = _surfer.MoveData.Buttons;
+            bool rawDuckHeld = HasSourceButton(buttons, InputButtons.Duck);
+            bool oldRawDuckHeld = HasSourceButton(
+                _surfer.MoveData.OldButtons,
+                InputButtons.RawDuck);
             if (!_duckInputInitialized)
             {
                 _rawDuckHeld = false;
                 _duckInputInitialized = true;
             }
 
-            bool rawDuckChanged = rawDuckHeld != _rawDuckHeld;
-            bool rawDuckReleased = _rawDuckHeld && !rawDuckHeld;
+            bool rawDuckChanged = rawDuckHeld != oldRawDuckHeld;
+            bool rawDuckReleased = oldRawDuckHeld && !rawDuckHeld;
             if (_mode == GokzMode.SimpleKz)
             {
                 if (!_ducking && _duckSpeed < DuckSpeedNormal)
@@ -1697,6 +1782,15 @@ namespace RidahFPS.Controllers
             // CheckParameters calls DuckingEnabled before CCSGameMovement::Duck
             // advances the per-tick recovery curve.
             _effectiveDuckButtonHeld = rawDuckHeld && DuckingEnabled();
+            if (rawDuckHeld)
+                buttons |= (int)InputButtons.RawDuck;
+            else
+                buttons &= ~(int)InputButtons.RawDuck;
+            if (_effectiveDuckButtonHeld)
+                buttons |= (int)InputButtons.Duck;
+            else
+                buttons &= ~(int)InputButtons.Duck;
+            _surfer.MoveData.Buttons = buttons;
             _surfer.MoveData.crouching = _effectiveDuckButtonHeld;
             _rawDuckHeld = rawDuckHeld;
         }
@@ -2033,12 +2127,22 @@ namespace RidahFPS.Controllers
             UpdateBoxCollider(true);
             FixPlayerCrouchStuck();
 
-            if (CategorizePosition(out RaycastHit duckGroundHit))
-            {
-                Grounded = true;
-                _groundHit = duckGroundHit;
-                _groundNormal = duckGroundHit.normal;
-            }
+            Grounded = CategorizePosition(out RaycastHit duckGroundHit);
+            _groundHit = Grounded ? duckGroundHit : default;
+            _groundNormal = Grounded ? duckGroundHit.normal : _movementUp;
+            _surfer.MoveData.SurfaceFriction = Grounded
+                ? GetSurfaceFriction(duckGroundHit)
+                : 1f;
+            _surfer.MoveData.SurfaceMaxSpeedFactor = Grounded
+                ? (_lastGroundSurfaceMaxSpeedFactor =
+                    GetSurfaceMaxSpeedFactor(duckGroundHit))
+                : _lastGroundSurfaceMaxSpeedFactor;
+            _surfer.MoveData.SurfaceJumpFactor = Grounded
+                ? GetSurfaceJumpFactor(duckGroundHit)
+                : 1f;
+            _surfer.MoveData.grounded = Grounded;
+            _surfer.MoveData.groundTransform =
+                Grounded ? duckGroundHit.transform : null;
         }
 
         private void FinishUnDuckState()
@@ -2059,12 +2163,22 @@ namespace RidahFPS.Controllers
             SetDuckedEyeOffset(0f);
             UpdateBoxCollider(false);
 
-            if (CategorizePosition(out RaycastHit unduckGroundHit))
-            {
-                Grounded = true;
-                _groundHit = unduckGroundHit;
-                _groundNormal = unduckGroundHit.normal;
-            }
+            Grounded = CategorizePosition(out RaycastHit unduckGroundHit);
+            _groundHit = Grounded ? unduckGroundHit : default;
+            _groundNormal = Grounded ? unduckGroundHit.normal : _movementUp;
+            _surfer.MoveData.SurfaceFriction = Grounded
+                ? GetSurfaceFriction(unduckGroundHit)
+                : 1f;
+            _surfer.MoveData.SurfaceMaxSpeedFactor = Grounded
+                ? (_lastGroundSurfaceMaxSpeedFactor =
+                    GetSurfaceMaxSpeedFactor(unduckGroundHit))
+                : _lastGroundSurfaceMaxSpeedFactor;
+            _surfer.MoveData.SurfaceJumpFactor = Grounded
+                ? GetSurfaceJumpFactor(unduckGroundHit)
+                : 1f;
+            _surfer.MoveData.grounded = Grounded;
+            _surfer.MoveData.groundTransform =
+                Grounded ? unduckGroundHit.transform : null;
         }
 
         private void UpdateBoxCollider(bool crouched)
@@ -2210,9 +2324,9 @@ namespace RidahFPS.Controllers
 
         private bool CanFitHullAt(Vector3 basePosition, float height)
         {
-            Vector3 center = basePosition +
-                _movementUp * (height * 0.5f + 0.01f);
-            Vector3 halfExtents = new Vector3(HullRadius, height * 0.5f, HullRadius) * 0.98f;
+            Vector3 center = basePosition + _movementUp * (height * 0.5f);
+            Vector3 halfExtents = GetQueryHalfExtents(
+                new Vector3(HullRadius, height * 0.5f, HullRadius));
             int count = Physics.OverlapBoxNonAlloc(
                 center,
                 halfExtents,
@@ -2423,7 +2537,16 @@ namespace RidahFPS.Controllers
             }
 
             Vector3 desired = viewForward * forwardSpeed + viewRight * rightSpeed;
-            if (desired.sqrMagnitude > 0.000001f)
+            if (ladderJumpRequested)
+            {
+                // CGameMovement::LadderMove enters the jump-button branch
+                // before its ordinary forward/side movement branch. During
+                // IGNORE_JUMP_TIME it leaves the previous ladder velocity
+                // untouched; it does not keep climbing from the current
+                // directional buttons.
+                velocity = _surfer.MoveData.Velocity;
+            }
+            else if (desired.sqrMagnitude > 0.000001f)
             {
                 // CGameMovement::LadderMove decomposes desired velocity into
                 // the ladder normal and its plane, then converts the normal
@@ -2619,6 +2742,114 @@ namespace RidahFPS.Controllers
             }
 
             return baseVelocity + groundBody.GetPointVelocity(playerTransform.position);
+        }
+
+        private void RefreshSourceWaterLevel()
+        {
+            if (_surfer == null || _surfer.MoveData.playerTransform == null)
+                return;
+
+            Transform playerTransform = _surfer.MoveData.playerTransform;
+            Vector3 feet = playerTransform.position;
+            float hullHeight = _isCrouched ? DuckHullHeight : PlayerHullHeight;
+            Vector3 waist = feet + _movementUp * (hullHeight * 0.5f);
+            float eyeHeight = Mathf.Lerp(
+                DuckEyeStanding,
+                DuckEyeCrouched,
+                Mathf.Clamp01(_eyeDuckAmount)) * UnitScale;
+            Vector3 eyes = feet + _movementUp * eyeHeight;
+
+            Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
+            Vector3 center = feet + _movementUp * halfExtents.y;
+            int count = Physics.OverlapBoxNonAlloc(
+                center,
+                GetQueryHalfExtents(halfExtents),
+                _sourceVolumeOverlaps,
+                Quaternion.identity,
+                Physics.AllLayers,
+                QueryTriggerInteraction.Collide);
+
+            GokzWaterLevel waterLevel = GokzWaterLevel.NotInWater;
+            GokzWaterType waterType = GokzWaterType.Water;
+            for (int i = 0; i < count; i++)
+            {
+                Collider collider = _sourceVolumeOverlaps[i];
+                if (collider == null || collider == _sourceHullCollider ||
+                    collider.transform.IsChildOf(playerTransform))
+                    continue;
+
+                GokzWaterVolume water =
+                    collider.GetComponentInParent<GokzWaterVolume>();
+                GokzMovementVolume movementVolume =
+                    collider.GetComponentInParent<GokzMovementVolume>();
+                bool movementWater = movementVolume != null &&
+                    movementVolume.IsWater;
+                bool legacyWater = water == null && !movementWater &&
+                    collider.CompareTag("Water");
+                if (water == null && !movementWater && !legacyWater)
+                    continue;
+
+                // Source CheckWater tests point contents at the feet first;
+                // waist and eye samples only matter after the feet sample is
+                // inside water. ClosestPoint returns the input point itself
+                // when it lies inside a Unity collider.
+                Vector3 closestFeet = collider.ClosestPoint(feet +
+                    _movementUp * UnitScale);
+                if ((closestFeet - (feet + _movementUp * UnitScale)).sqrMagnitude >
+                    CollisionSkin * CollisionSkin)
+                    continue;
+
+                GokzWaterLevel candidateLevel;
+                GokzWaterType candidateType;
+                if (legacyWater)
+                {
+                    // Old LUO Water-tag volumes have no surface metadata;
+                    // preserve their established fully-submerged meaning.
+                    candidateLevel = GokzWaterLevel.Eyes;
+                    candidateType = GokzWaterType.Water;
+                }
+                else
+                {
+                    candidateLevel = water != null
+                        ? water.GetLevel(
+                            feet,
+                            _isCrouched,
+                            _eyeDuckAmount)
+                        : movementVolume.GetWaterLevel(
+                            feet,
+                            _isCrouched,
+                            _eyeDuckAmount);
+                    candidateType = water != null
+                        ? water.waterType
+                        : movementVolume.WaterType;
+
+                    // Require the source midpoint/eye sample to remain inside
+                    // the same volume before reporting those higher levels.
+                    Vector3 closestWaist = collider.ClosestPoint(waist);
+                    Vector3 closestEyes = collider.ClosestPoint(eyes);
+                    bool containsWaist = (closestWaist - waist).sqrMagnitude <=
+                        CollisionSkin * CollisionSkin;
+                    bool containsEyes = (closestEyes - eyes).sqrMagnitude <=
+                        CollisionSkin * CollisionSkin;
+                    if (candidateLevel >= GokzWaterLevel.Eyes && !containsEyes)
+                        candidateLevel = containsWaist
+                            ? GokzWaterLevel.Waist
+                            : GokzWaterLevel.Feet;
+                    else if (candidateLevel >= GokzWaterLevel.Waist &&
+                             !containsWaist)
+                        candidateLevel = GokzWaterLevel.Feet;
+                }
+
+                if (candidateLevel > waterLevel)
+                {
+                    waterLevel = candidateLevel;
+                    waterType = candidateType;
+                }
+            }
+
+            _surfer.MoveData.waterLevel = waterLevel;
+            _surfer.MoveData.waterType = waterType;
+            _surfer.MoveData.underwater = waterLevel >= GokzWaterLevel.Waist;
         }
 
         private void UpdateSourceMovementVolumes(bool groundedAtTriggerTouch)
@@ -2934,6 +3165,16 @@ namespace RidahFPS.Controllers
                 _surfer == null || _surfer.MoveData.playerTransform == null)
                 return false;
 
+            // With Source movement optimizations enabled, CGameMovement only
+            // calls CheckStuck once per CHECK_STUCK_INTERVAL while the player
+            // has no pending stuck offset. Once an offset attempt has failed,
+            // GetCheckInterval(STUCK) switches to every command tick.
+            // Source schedules the first phase from command number + entity
+            // index; this single-player adapter has no Source entity index,
+            // so it preserves the 1-second cadence with a fixed tick phase.
+            if (_stuckOffsetIndex == 0 && _movementTick % TickRate != 0)
+                return false;
+
             Transform playerTransform = _surfer.MoveData.playerTransform;
             Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
             if (!IsHullStuckAt(playerTransform.position, halfExtents))
@@ -2944,7 +3185,7 @@ namespace RidahFPS.Controllers
 
             // CGameMovement::CheckStuck rate-limits retries to 0.05 seconds,
             // tests exactly one entry from the 54-offset Source table per
-            // attempt, and leaves velocity untouched when the test fails.
+            // accepted attempt, and leaves velocity untouched when it fails.
             if (_elapsed - _lastStuckCheckTime < 0.05f)
                 return true;
 
@@ -3034,6 +3275,7 @@ namespace RidahFPS.Controllers
                 ref horizontalVelocity,
                 Friction,
                 _surfer.MoveData.SurfaceFriction);
+            CheckVelocity(ref horizontalVelocity);
 
             // Source's HandleDuckingSpeedCrop applies the fractional duck
             // modifier to the command and max speed. CS:GO's crouched speed
@@ -3118,7 +3360,11 @@ namespace RidahFPS.Controllers
                 MaxVelocity,
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
-            if (!TryGetNearestHit(hitCount, out RaycastHit slopeHit))
+            // gokz-mode-kztimer.sp uses MASK_PLAYERSOLID_BRUSHONLY and its
+            // trace filter excludes every client. Unity has no Source CONTENTS
+            // mask, so map those exclusions to this project's Player/Enemy
+            // tags while retaining movable world colliders in the query.
+            if (!TryGetNearestBrushOnlyHit(hitCount, out RaycastHit slopeHit))
                 return;
 
             float groundUpDot = Vector3.Dot(slopeHit.normal, _movementUp);
@@ -3138,17 +3384,72 @@ namespace RidahFPS.Controllers
 
         private static Vector3 ClipLandingVelocity(Vector3 velocity, Vector3 normal, Vector3 up)
         {
+            // Port gokz-mode-kztimer.sp::SlopeFix, which clips only the two
+            // horizontal components before clearing vertical velocity. The
+            // Source plugin's loop covers X/Y; LUO's floor plane is X/Z.
             float backoff = Vector3.Dot(velocity, normal);
-            Vector3 clipped = velocity - normal * backoff;
+            Vector3 horizontalNormal = Vector3.ProjectOnPlane(normal, up);
+            Vector3 clipped = Vector3.ProjectOnPlane(velocity, up) -
+                horizontalNormal * backoff;
             float correction = Vector3.Dot(clipped, normal);
             if (correction < 0f)
-                clipped -= normal * correction;
+                clipped -= horizontalNormal * correction;
             return Vector3.ProjectOnPlane(clipped, up);
+        }
+
+        private bool TryGetNearestBrushOnlyHit(
+            int hitCount,
+            out RaycastHit nearest)
+        {
+            nearest = default;
+            float nearestDistance = float.PositiveInfinity;
+            bool found = false;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit candidate = _moveHits[i];
+                if (candidate.collider == null ||
+                    candidate.collider == _sourceHullCollider ||
+                    (_surfer != null &&
+                     _surfer.MoveData.playerTransform != null &&
+                     candidate.collider.transform.IsChildOf(
+                         _surfer.MoveData.playerTransform)) ||
+                    IsSourceMonsterCollider(candidate.collider) ||
+                    candidate.distance >= nearestDistance)
+                    continue;
+
+                nearest = candidate;
+                nearestDistance = candidate.distance;
+                found = true;
+            }
+
+            return found;
+        }
+
+        private static bool IsSourceMonsterCollider(Collider collider)
+        {
+            for (Transform current = collider != null
+                     ? collider.transform
+                     : null;
+                 current != null;
+                 current = current.parent)
+            {
+                // These tags exist in this LUO project. Source's brush-only
+                // movement mask excludes CONTENTS_MONSTER, which covers
+                // players and NPCs; the tags are the closest project mapping.
+                if (current.CompareTag("Player") ||
+                    current.CompareTag("Enemy"))
+                    return true;
+            }
+
+            return false;
         }
 
         private void AirMove(float realPreVelMod)
         {
             Vector3 velocity = _surfer.MoveData.Velocity;
+            // FullWalkMove checks the current velocity after CheckJumpButton
+            // and before AirMove applies air acceleration.
+            CheckVelocity(ref velocity);
 
             // The same Source duck crop is applied before AirMove. GOKZ's
             // AirAccelerate detour removes only the prestrafe modifier; it
@@ -3620,6 +3921,11 @@ namespace RidahFPS.Controllers
             }
         }
 
+        private static bool HasSourceButton(int buttons, InputButtons button)
+        {
+            return (buttons & (int)button) != 0;
+        }
+
         private void ApplyFriction(
             ref Vector3 velocity,
             float friction,
@@ -3658,7 +3964,12 @@ namespace RidahFPS.Controllers
             Vector3 clipped = velocity - normal * backoff;
             float adjust = Vector3.Dot(clipped, normal);
             if (adjust < 0f)
+            {
+                // CGameMovement::ClipVelocity clamps tiny negative plane
+                // errors to -DIST_EPSILON before the correction pass.
+                adjust = Mathf.Min(adjust, -SourceDistanceEpsilon);
                 clipped -= normal * adjust;
+            }
             return clipped;
         }
 

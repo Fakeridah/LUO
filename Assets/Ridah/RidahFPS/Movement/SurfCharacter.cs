@@ -310,6 +310,8 @@ namespace RidahFPS.Controllers
             // Keep the movement origin synchronized with external teleports and
             // moving platforms before the controller consumes this tick.
             Vector3 positionalMovement = transform.position - prevPosition;
+            _moveData.gameCodeMovedPlayer = positionalMovement.sqrMagnitude >
+                0.00000001f;
             MoveData.Origin += positionalMovement;
 
             // PlayerAction changes these flags before the next physics tick. Do
@@ -330,7 +332,13 @@ namespace RidahFPS.Controllers
                 UpdateCameraTrigger();
             }
 
-            //velocity process 
+            if (UseGoKzMovement)
+                _controller.EnableGoKzCollision(this);
+            else
+                _controller.DisableGoKzCollision(this);
+
+            // The Source hull must exist before ProcessMovement performs its
+            // initial ground categorization, duck update, or water sampling.
             _controller.ProcessMovement(this, moveConfig, Time.fixedDeltaTime, UseGoKzMovement);
 
             if (UseGoKzMovement)
@@ -338,7 +346,6 @@ namespace RidahFPS.Controllers
 
             if (UseGoKzMovement)
             {
-                _controller.EnableGoKzCollision(this);
                 if (MoveEnabled)
                     _controller.MoveGoKz(this);
                 _controller.FinishGoKz(this);
@@ -351,7 +358,6 @@ namespace RidahFPS.Controllers
             }
             else
             {
-                _controller.DisableGoKzCollision(this);
                 if (MoveEnabled)
                     cc.Move(MoveData.Velocity * Time.fixedDeltaTime);
             }
@@ -381,6 +387,23 @@ namespace RidahFPS.Controllers
             // a one-shot request here.
             _moveData.wishJump = _queuedGokzJump && jumpEnabled;
             _queuedGokzJump = false;
+
+            InputButtons sourceButtons = InputButtons.None;
+            if (_moveData.wishJump || _moveData.jumpHeld)
+                sourceButtons |= InputButtons.Jump;
+            if (_moveData.crouching)
+                sourceButtons |= InputButtons.Duck;
+            if (_moveData.sprinting)
+                sourceButtons |= InputButtons.Speed;
+            if (_moveData.moveLeft)
+                sourceButtons |= InputButtons.MoveLeft;
+            if (_moveData.moveRight)
+                sourceButtons |= InputButtons.MoveRight;
+            if (_moveData.moveForward)
+                sourceButtons |= InputButtons.Forward;
+            if (_moveData.moveBack)
+                sourceButtons |= InputButtons.Back;
+            _moveData.Buttons = (int)sourceButtons;
         }
 
         private void UpdateGoKzViewHeight()
@@ -393,9 +416,9 @@ namespace RidahFPS.Controllers
             // ViewOffset.y is a project-specific value, so subtracting only
             // 18 HU from it does not reproduce the CSGO camera movement.
             float gravitySign = MoveData.reverseGravity < 0f ? -1f : 1f;
-            // The physical hull and eye presentation are separate. An
-            // airborne duck may already use the 54HU hull while the eye
-            // remains at its current height.
+            // The physical hull and eye offset have separate Source state.
+            // In an airborne FinishDuck, CS:GO raises the origin by 9 HU and
+            // sets the eye offset to 46 HU in the same command.
             _gokzCrouchVisual = Mathf.Clamp01(GokzEyeDuckAmount);
             float eyeHeightHu = Mathf.Lerp(64f, 46f, _gokzCrouchVisual);
             float targetY = eyeHeightHu / GokzKzTimerMovement.HammerUnitsPerUnityUnit * gravitySign;

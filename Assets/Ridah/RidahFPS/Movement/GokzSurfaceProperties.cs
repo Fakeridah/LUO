@@ -42,11 +42,12 @@ namespace RidahFPS.Controllers
             switch (preset)
             {
                 case GokzSurfacePreset.Ice:
-                    // Source's standard ice surface uses a very low physics
-                    // friction. Its CS:GO game movement multipliers remain
-                    // at their default values, so ice changes sliding and
-                    // acceleration without changing jump height or the
-                    // player max-speed crop.
+                    // Unity-authored compatibility mapping. The local
+                    // cstrike15_src tree contains surfacedata_t's fields but
+                    // not CS:GO's shipped surface-property data table, so
+                    // 0.05 is not claimed to be the game's exact ice value.
+                    // Keep the game movement multipliers at their defaults;
+                    // this preset only changes the editable physics friction.
                     return new GokzSourceSurfaceData
                     {
                         sourceFriction = 0.05f,
