@@ -763,5 +763,6 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 - `viewTransform` 仍是活动运动所需：它提供 GOKZ/CS:GO 的前向与侧向输入方向，核心也用逐 tick 累积的 `ViewYawDelta` 计算预加速与转向状态；它同时承载 64/46 HU 眼高变化。因此保留摄像机引用和 yaw 采样。
 - 移除了没有消费者的 `MoveData.viewTransform`、`MoveData.ViewAngles` 和 `LZM.GokzDuckAmount`。
 - `ViewOffset` 的纵向值已经不参与 GOKZ 视角，横向分量在当前项目 prefab 中为 0；因此删除整个旧偏移字段，摄像机固定按 Source 眼高并由 GOKZ 蹲起状态驱动。
+- 主玩家 prefab 的 YAML 仍留有旧脚本字段序列化值（包括 `ViewOffset`）；LZM 已无对应字段，运行和 Inspector 不会读取它们。Unity CLI 的 prefab 保存会连带改写大量 Cinemachine/其他组件序列化，因此已撤销该保存结果，没有为清理孤立 YAML 改动无关 prefab 数据。
 - Unity Console 的最终编译状态需以本次编辑器状态为准；未运行游戏或测试。
 
