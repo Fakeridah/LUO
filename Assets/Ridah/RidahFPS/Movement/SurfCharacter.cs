@@ -157,7 +157,6 @@ namespace RidahFPS.Controllers
         private bool _gokzCrouching;
         private bool _gokzSprinting;
         private List<Collider> triggers = new List<Collider>();
-        private int numberOfTriggers = 0;
         #endregion
 
         private void OnDrawGizmos()
@@ -320,6 +319,16 @@ namespace RidahFPS.Controllers
                 _moveData.reverseGravity = 1f;
             else if (_useGravityEffect)
                 _moveData.reverseGravity = _reverseGravity ? -1f : 1f;
+
+            if (UseGoKzMovement)
+            {
+                // Source checks water contents during every PlayerMove. The
+                // Unity trigger list can change between render Updates, so
+                // refresh its flags and Source water level for each 128 Hz
+                // movement command as well.
+                UpdateTrigger();
+                UpdateCameraTrigger();
+            }
 
             //velocity process 
             _controller.ProcessMovement(this, moveConfig, Time.fixedDeltaTime, UseGoKzMovement);
@@ -642,39 +651,50 @@ namespace RidahFPS.Controllers
         }
         private void UpdateTrigger()
         {
-            // Triggers
-            if (numberOfTriggers != triggers.Count)
+            underwater = false;
+            Booster = false;
+            Bouncer = false;
+            LoseWeight = false;
+            triggers.RemoveAll(item => item == null);
+            foreach (Collider trigger in triggers)
             {
-                numberOfTriggers = triggers.Count;
+                if (trigger == null)
+                    continue;
 
-                underwater = false;
-                Booster = false;
-                Bouncer = false;
-                LoseWeight = false;
-                triggers.RemoveAll(item => item == null);
-                foreach (Collider trigger in triggers)
-                {
-
-                    if (trigger == null)
-                        continue;
-
-                    if (trigger.tag == "Water")
-                        underwater = true;
-                    if (trigger.tag == "Booster")
-                        Booster = true;
-                    if (trigger.tag == "Bouncer")
-                        Bouncer = true;
-                    if (trigger.tag == "LoseWeight")
-                        LoseWeight = true;
-
-                }
-
+                if (trigger.tag == "Water")
+                    underwater = true;
+                if (trigger.tag == "Booster")
+                    Booster = true;
+                if (trigger.tag == "Bouncer")
+                    Bouncer = true;
+                if (trigger.tag == "LoseWeight")
+                    LoseWeight = true;
             }
         }
         private void UpdateCameraTrigger()
         {
             MoveData.underwater = underwater;
-            MoveData.waterLevel = underwater
+            bool hasSourceWaterMetadata = false;
+            foreach (Collider trigger in triggers)
+            {
+                if (trigger == null)
+                    continue;
+
+                GokzWaterVolume water = trigger.GetComponentInParent<GokzWaterVolume>();
+                GokzMovementVolume movementVolume =
+                    trigger.GetComponentInParent<GokzMovementVolume>();
+                if (water != null ||
+                    (movementVolume != null && movementVolume.IsWater))
+                {
+                    hasSourceWaterMetadata = true;
+                    break;
+                }
+            }
+
+            // Legacy Water-tag triggers have no surface plane, so retain their
+            // previous full-submersion interpretation only when no explicit
+            // Source-style water metadata is available.
+            MoveData.waterLevel = underwater && !hasSourceWaterMetadata
                 ? GokzWaterLevel.Eyes
                 : GokzWaterLevel.NotInWater;
             MoveData.waterType = GokzWaterType.Water;

@@ -20,7 +20,7 @@
 
 1. 不得把 SimpleKZ、bhop、surf 或自行设计的移动逻辑冒充 GOKZ KZTimer。
 2. 不得为了让测试数字好看而添加无源码依据的最终速度硬截断。
-3. 只有在官方源码、Source 引擎代码或明确的 GOKZ/MovementAPI 行为依据支持时，才可以修改运动规则。
+3. 只有在本地 GOKZ 源码、本地 CS:GO 泄漏源码或 GOKZ 实际依赖的 MovementAPI 行为依据支持时，才可以修改运动规则。
 4. 任何无法直接从公开源码确认的 CS:GO 引擎行为，都必须标记为“待参考运行数据验证”，不能写成“已经完全一致”。
 5. 原有 `CharacterController` 路径和旧 `SurfController` 代码不能删除，应保留作为回退和参考。
 6. 修改前先说明：源码依据、当前差异、修改范围、预期影响和验证方法。
@@ -98,11 +98,17 @@ MovementAPI 不是可有可无的辅助文件。它负责记录和暴露：
 - 碰撞次数和每次碰撞的起点、终点、法线；
 - Duck、WalkMove、AirAccelerate、CategorizePosition、TryPlayerMove 等阶段的前后事件。
 
-### 2.3 Source 引擎移动代码
+### 2.3 CS:GO 引擎移动代码
 
-- [Valve Source SDK 2013 gamemovement.cpp](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/game/shared/gamemovement.cpp)
+唯一的 CS:GO 引擎参考是用户放入项目的 `ThirdParty/cstrike15_src-master`，对应仓库 [`perilouswithadollarsign/cstrike15_src`](https://github.com/perilouswithadollarsign/cstrike15_src)。这是社区发布的 CS:GO 泄漏源码，不是 Valve 官方 SDK，也不能据此声称已获得 Valve 官方完整源码。
 
-该代码可以作为公开的 Source 移动调用顺序和基础公式参考，但它不等于 CS:GO 的完整私有 `CCSGameMovement` 实现。需要把这一点明确记录下来。
+运动规则必须优先逐项对照本地 CS:GO 覆盖实现：
+
+- `ThirdParty/cstrike15_src-master/game/shared/cstrike15/cs_gamemovement.cpp`：`CCSGameMovement` 的 `ProcessMovement`、`PlayerMove`、`CheckJumpButton`、`Duck`、`Accelerate`、`OnJump`、`OnLand`、梯子与体力逻辑。
+- `ThirdParty/cstrike15_src-master/game/shared/gamemovement.cpp`：仅当本地 `CCSGameMovement` 继承或实际调用基类实现时，才用它解释对应的被调用阶段，例如 `FullWalkMove`、`Friction`、`WalkMove`、`AirMove`、`AirAccelerate`、`TryPlayerMove`、`CategorizePosition`、`StartGravity`/`FinishGravity`。
+- 同仓库中的 `game/shared/cstrike15/cs_player_shared.cpp`、`cs_player_shared.h` 与 `cs_gamemovement.cpp`：核对 CS:GO 玩家状态、duck 变量、视角偏移及其与移动代码的关系。
+
+不得用 Valve Source SDK 2013、Source SDK Base、通用 Source 示例或其他 Source 游戏的实现替代上述本地 CS:GO 源码。即使引用同仓库的 `gamemovement.cpp`，也必须先确认 CS:GO 的覆盖函数是否调用它，以及调用发生的准确阶段。
 
 ---
 
@@ -588,7 +594,7 @@ Unity BoxCast 只是底层查询实现，不应直接承担 Source 状态语义�
 
 1. GOKZ 官方 gokz-mode-kztimer.sp；
 2. danzayau/MovementAPI；
-3. Valve Source SDK gamemovement.cpp；
+3. 本地 `ThirdParty/cstrike15_src-master` 中的 `cs_gamemovement.cpp` 及其实际调用的同仓库基类实现；
 4. 当前项目实际代码，而不是只看注释。
 
 重要限制：
@@ -736,4 +742,30 @@ GOKZ 仓库不是完整的 CS:GO 引擎源码。它依赖引擎内部的 `CCSGam
 - 问题记录先写入并推送到 GitHub（提交 `0ef6f6d1`），之后执行代码回退。
 - 不替用户操作角色，不重置场景，不运行测试；回退后核对目标文件与 `e7ab6fed` 一致，并读取 Unity 编译状态。
 - 恢复后的游戏内表现尚未由用户验证；不能据此声称抖动或卡点已解决。
+
+## 15. 2026-11-18 运动代码源码核对
+
+### 15.1 本次对照范围与唯一引擎参考
+
+- CS:GO 引擎源码只使用项目内 `ThirdParty/cstrike15_src-master`，即用户指定的 `perilouswithadollarsign/cstrike15_src`；没有使用 Source SDK 2013 替代。
+- GOKZ 规则使用项目内 `ThirdParty/gokz-master`，重点核对 `gokz-mode-kztimer.sp` 与 `gokz-momsurffix.sp`。
+- 对照了活动入口 `SurfCharacter.FixedUpdate -> SurfController.ProcessMovement -> GokzKzTimerMovement.Process/Move/Finish`，以及运动参数、碰撞、蹲、水、梯子、表面与移动体积适配代码。
+- 旧 `CharacterController` 和 `SurfController` 运动实现仍作为旧路径保留；本次没有重写或删除。
+
+### 15.2 本次按源码修正
+
+1. `gokz-momsurffix.sp` 的完整位移扫掠在全程移动后做独立终点 hull trace。若第一 bump 的终点落入实体，进入 ramp 重试；若之后的 grounded bump 仍落入实体，则把速度归零并退出。Unity 适配此前把这两种情况都送入 ramp 重试，现已按该分支区分。
+2. `gokz-momsurffix.sp::IsValidMovementTrace` 只判当前 trace 的 startsolid/allsolid，以及零 fraction 的指定非 walkable plane；终点实体检查属于后续的 fraction=1 分支。Unity 适配已移除混在该函数里的终点检查，并使用原始扫掠 fraction 做 plane 判定。
+3. GOKZ 的 `TryPlayerMove` 替换实现没有基础 `CGameMovement::TryPlayerMove` 的 `MINIMUM_MOVE_FRACTION` 截断；活动实现已移除这条额外截断。
+4. CS:GO `CreateStuckTable` 的大偏移组合按 Z、X、Y 循环生成。Unity 适配之前按 X、Y、Z 生成，现已调整为源码顺序，以保持每次卡住重试的偏移序列一致。
+5. CS:GO `CGameMovement::CheckWater` 在每次 `PlayerMove` 采样水位；LUO 原先只在 render `Update` 更新水位。GOKZ 活动路径现于每个 128 Hz 固定 tick 重算触发器状态和水位，并移除仅比较触发器数量的缓存判断，避免数量不变但对象更换时沿用旧状态。
+6. CSGO `PhysicsTouchTriggers(&prevOrigin)` 检测本次位移路径经过的触发器。普通 Push 体积现除了终点重叠，也检查 tick 起点重叠和起点至终点的盒体扫掠；推力仍通过 `FL_BASEVELOCITY` 对应的跨 tick 路径施加。
+
+### 15.3 仍不能声称完全一致的边界
+
+- Unity `Physics.BoxCast` / `ComputePenetration` 与 Source `TracePlayerBBox` 的碰撞过滤、startsolid、接触边界和位移精度不是同一个实现；当前代码仍有碰撞皮肤适配。需要真实场景逐 tick 对照，不能仅凭代码宣称完全一致。
+- 项目只有 `movementapi.inc` 声明，没有 MovementAPI 原生实现源码；因此 `Turning`、`HitPerf` 及完整 landing/takeoff 事件时序不能由本地源码完全验证。
+- 失重、反向重力与 Unity Rigidbody/Trigger 交互是 LUO/Unity 适配扩展，不是 KZTimer 的原生 CS:GO 运动规则。
+- 本次没有启动 Unity/游戏，没有运行测试或编译；尚未得到引擎编译结果或玩家实测结果。
+- `Assets/Ridah/RidahWeapon/Weapon/Portal/Scripts/Rotater.cs` 及其 `.meta` 是既有未跟踪文件，与运动审计无关，本次未修改。
 
