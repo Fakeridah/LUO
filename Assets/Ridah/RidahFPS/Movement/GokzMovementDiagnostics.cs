@@ -37,10 +37,10 @@ namespace RidahFPS.Controllers
 
             float displacementHu = Vector3.Distance(
                 player.transform.position,
-                _previousPosition) * GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                _previousPosition) * SourceMovementCore.HammerUnitsPerUnityUnit;
             float maxAllowedHu = GokzModeSettings.For(
                 GokzRuntime.Instance != null ? GokzRuntime.Instance.Mode : GokzMode.KzTimer).maxVelocity /
-                GokzKzTimerMovement.TickRate + toleranceHu;
+                SourceMovementCore.TickRate + toleranceHu;
             if (displacementHu > maxAllowedHu && GokzRuntime.Instance != null)
             {
                 Violations++;

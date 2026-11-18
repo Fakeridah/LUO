@@ -6,8 +6,7 @@ namespace RidahFPS.Controllers
     /// <summary>
     /// KZTimer movement port.
     ///
-    /// This is deliberately independent from MovementConfig. The values and
-    /// the order of operations come from GOKZ KZTimer and the Source
+    /// The values and order of operations come from GOKZ KZTimer and the Source
     /// CGameMovement implementation. The active hull is an axis-aligned
     /// Source player box and is swept manually; CharacterController is not
     /// used by this path.
@@ -73,12 +72,6 @@ namespace RidahFPS.Controllers
         private const float WalkSpeedModifier = 0.52f;
         private const float DuckEyeStanding = 64f;
         private const float DuckEyeCrouched = 46f;
-        // Kept only by UpdateDuckStateLegacy below as a reference to the
-        // generic Source CGameMovement duck routine. The active path uses
-        // CCSGameMovement::Duck and does not use this timer.
-        private const float DuckTransitionTimeMilliseconds = 1000f;
-        private const float TimeToDuckMilliseconds = 200f;
-        private const float TimeToUnduckMilliseconds = 200f;
         private const float DuckAirOriginOffset = 9f * UnitScale;
         private const float WaterJumpDurationMilliseconds = 2000f;
         private const float WaterJumpVelocity = 256f * UnitScale;
@@ -100,7 +93,7 @@ namespace RidahFPS.Controllers
         private const float SimpleSpeedDecrementMidair = 0.2824f;
         private const int SimpleGraceTicks = 3;
 
-        private ISurfControllable _surfer;
+        private IGokzMovementPlayer _surfer;
         private Vector3 _movementUp = Vector3.up;
         private Vector3 _colliderUp = Vector3.up;
         private Vector3 _groundNormal = Vector3.up;
@@ -125,14 +118,10 @@ namespace RidahFPS.Controllers
         private float _eyeDuckAmount;
         private float _duckSpeed = DuckSpeedNormal;
         private Vector3 _lastFullDuckSpeedPosition;
-        // Reference-only state for UpdateDuckStateLegacy.
-        private float _duckTimeMilliseconds;
         private bool _rawDuckHeld;
         private bool _duckInputInitialized;
         private bool _effectiveDuckButtonHeld;
         private float _lastDuckTime = float.NegativeInfinity;
-        private bool _inDuckJump;
-        private bool _duckJumpTimeActive;
         private bool _wasPhysicallyCrouched;
         private bool _duckedAtProcessStart;
         // GOKZ's FixDisplacementStuck restores the velocity sampled by the
@@ -241,7 +230,7 @@ namespace RidahFPS.Controllers
             _stamina = 0f;
         }
 
-        public void EnableSourceCollision(ISurfControllable surfer)
+        public void EnableSourceCollision(IGokzMovementPlayer surfer)
         {
             if (_collisionReady)
                 return;
@@ -293,7 +282,7 @@ namespace RidahFPS.Controllers
             Physics.SyncTransforms();
         }
 
-        public void DisableSourceCollision(ISurfControllable surfer)
+        public void DisableSourceCollision(IGokzMovementPlayer surfer)
         {
             if (!_collisionReady)
                 return;
@@ -315,7 +304,7 @@ namespace RidahFPS.Controllers
             _collisionReady = false;
         }
 
-        public void Move(ISurfControllable surfer)
+        public void Move(IGokzMovementPlayer surfer)
         {
             if (!_collisionReady || _movementBlockedThisTick ||
                 surfer.MoveData.playerTransform == null)
@@ -1003,7 +992,7 @@ namespace RidahFPS.Controllers
             return found;
         }
 
-        public void Process(ISurfControllable surfer)
+        public void Process(IGokzMovementPlayer surfer)
         {
             _surfer = surfer;
             _processStartPosition = surfer.MoveData.playerTransform != null
@@ -1203,7 +1192,7 @@ namespace RidahFPS.Controllers
             // CGameMovement::PlayerMove attempts LadderMove before it dispatches
             // to FullWalkMove. Water and water-jump handling are inside
             // FullWalkMove, so they cannot take priority over an active ladder.
-            if (_surfer.MoveData.laddersEnabled && TryLadderMove())
+            if (TryLadderMove())
             {
                 // LadderMove is a complete movement branch in Source.
             }
@@ -1245,7 +1234,7 @@ namespace RidahFPS.Controllers
             _tickStarted = true;
         }
 
-        public void Finish(ISurfControllable surfer)
+        public void Finish(IGokzMovementPlayer surfer)
         {
             if (!_tickStarted || _surfer != surfer)
                 return;
@@ -1419,13 +1408,10 @@ namespace RidahFPS.Controllers
             _eyeDuckAmount = 0f;
             _duckSpeed = DuckSpeedNormal;
             _lastFullDuckSpeedPosition = Vector3.zero;
-            _duckTimeMilliseconds = 0f;
             _rawDuckHeld = false;
             _duckInputInitialized = false;
             _effectiveDuckButtonHeld = false;
             _lastDuckTime = float.NegativeInfinity;
-            _inDuckJump = false;
-            _duckJumpTimeActive = false;
             _wasPhysicallyCrouched = false;
             _duckedAtProcessStart = false;
             _gokzOldVelocity = Vector3.zero;
@@ -1921,192 +1907,6 @@ namespace RidahFPS.Controllers
             }
 
         }
-
-        // Reference copy of the generic Source CGameMovement duck routine.
-        // It is intentionally not called by the GOKZ path; CS:GO dispatches
-        // CCSGameMovement::Duck instead.
-        private void UpdateDuckStateLegacy()
-        {
-            if (!_collisionReady)
-                return;
-
-            if (!_hullInitialized)
-            {
-                _hullInitialized = true;
-                _isCrouched = false;
-                _duckAmount = 0f;
-                _duckSpeed = DuckSpeedNormal;
-                _lastFullDuckSpeedPosition = _surfer.MoveData.playerTransform.position;
-                _duckTimeMilliseconds = 0f;
-                _rawDuckHeld = false;
-                _duckInputInitialized = true;
-                _lastDuckTime = float.NegativeInfinity;
-            }
-
-            // Gravity shifts keep the same feet/top anchor but reverse which
-            // side of that anchor the Source hull occupies.
-            if ((_colliderUp - _movementUp).sqrMagnitude > 0.000001f)
-                UpdateBoxCollider(_isCrouched);
-
-            // CCSGameMovement::CheckParameters keeps a raw duck bit so the
-            // spam penalty is applied to both press and release, even when a
-            // gameplay hook later removes IN_DUCK. GOKZ's KZTimer hook resets
-            // the speed on a raw release before Source subtracts its 2.0
-            // penalty; SimpleKZ has its own 6.0234375 minimum.
-            bool rawDuckHeld = _surfer.MoveData.crouching;
-            if (!_duckInputInitialized)
-            {
-                _rawDuckHeld = false;
-                _duckInputInitialized = true;
-            }
-
-            bool rawDuckChanged = rawDuckHeld != _rawDuckHeld;
-            bool rawDuckReleased = _rawDuckHeld && !rawDuckHeld;
-            if (_mode == GokzMode.SimpleKz)
-            {
-                if (!_ducking && _duckSpeed < DuckSpeedNormal)
-                    _duckSpeed = DuckSpeedNormal;
-                else if (_duckSpeed < DuckSpeedMinimum)
-                    _duckSpeed = DuckSpeedMinimum;
-            }
-            else if (_mode == GokzMode.KzTimer && rawDuckReleased)
-            {
-                _duckSpeed = DuckSpeedNormal;
-            }
-
-            if (rawDuckChanged)
-                _duckSpeed = Mathf.Max(0f, _duckSpeed - DuckSpamPenalty);
-
-            // This is the engine's recovery curve. GOKZ's ReduceDuckSlowdown
-            // hook runs before Source's Duck() state machine.
-            _duckSpeed = Mathf.MoveTowards(
-                _duckSpeed,
-                DuckSpeedNormal,
-                3f * TickInterval);
-
-            if (_duckAmount <= 0f || _duckAmount >= 1f)
-            {
-                float distanceFromRecoveryPoint = Vector3.ProjectOnPlane(
-                    _surfer.MoveData.playerTransform.position - _lastFullDuckSpeedPosition,
-                    _movementUp).magnitude;
-                if (distanceFromRecoveryPoint > 64f * UnitScale)
-                {
-                    _duckSpeed = Mathf.MoveTowards(
-                        _duckSpeed,
-                        DuckSpeedNormal,
-                        6f * TickInterval);
-                }
-                _lastFullDuckSpeedPosition = _surfer.MoveData.playerTransform.position;
-            }
-
-            bool duckButtonHeld = rawDuckHeld && DuckingEnabled();
-
-            // Source starts a one-second duck timer on the press edge. The
-            // actual eye transition is only the 200 ms CS:GO segment of that
-            // timer; the physical duck amount still follows m_flDuckSpeed.
-            if (duckButtonHeld && !_isCrouched && !_ducking &&
-                !_inDuckJump && !_duckJumpTimeActive)
-            {
-                _duckTimeMilliseconds = DuckTransitionTimeMilliseconds;
-                _ducking = true;
-            }
-
-            if (!duckButtonHeld && _duckAmount > 0f)
-            {
-                // This mirrors Source's recovery for a state that is still
-                // physically ducked after the button was released.
-                _ducking = true;
-            }
-            else if (duckButtonHeld && _duckAmount < 1f)
-            {
-                _ducking = true;
-            }
-
-            if (duckButtonHeld && _ducking && !_isCrouched)
-            {
-                float speed = _duckSpeed * 0.8f;
-                _duckAmount = Mathf.MoveTowards(
-                    _duckAmount,
-                    1f,
-                    TickInterval * speed);
-
-                float duckMilliseconds = DuckTransitionTimeMilliseconds -
-                    _duckTimeMilliseconds;
-                // CGameMovement::Duck finishes after TIME_TO_DUCK_MSECS or
-                // immediately when the player is airborne.
-                if (_duckAmount >= 1f || duckMilliseconds > TimeToDuckMilliseconds ||
-                    !Grounded)
-                    FinishDuckState();
-                else
-                    SetDuckedEyeOffset(
-                        FractionDucked(duckMilliseconds, TimeToDuckMilliseconds));
-            }
-            else if (!duckButtonHeld && _ducking)
-            {
-                if (CanUnduck())
-                {
-                    if (rawDuckReleased)
-                    {
-                        if (_isCrouched && !_inDuckJump)
-                        {
-                            _duckTimeMilliseconds = DuckTransitionTimeMilliseconds;
-                        }
-                        else if (!_isCrouched)
-                        {
-                            // Source inverts the remaining duck timer when
-                            // release happens before full duck.
-                            float elapsedMilliseconds =
-                                DuckTransitionTimeMilliseconds -
-                                _duckTimeMilliseconds;
-                            float fractionDucked = Mathf.Clamp01(
-                                elapsedMilliseconds / TimeToDuckMilliseconds);
-                            float remainingUnduckMilliseconds =
-                                fractionDucked * TimeToUnduckMilliseconds;
-                            _duckTimeMilliseconds =
-                                DuckTransitionTimeMilliseconds -
-                                TimeToUnduckMilliseconds +
-                                remainingUnduckMilliseconds;
-                        }
-                    }
-
-                    float speed = Mathf.Max(DuckSpeedAlwaysMinimum, _duckSpeed);
-                    _duckAmount = Mathf.MoveTowards(
-                        _duckAmount,
-                        0f,
-                        TickInterval * speed);
-
-                    float duckMilliseconds = DuckTransitionTimeMilliseconds -
-                        _duckTimeMilliseconds;
-                    if (_duckAmount <= 0f ||
-                        duckMilliseconds > TimeToUnduckMilliseconds ||
-                        (!Grounded && !_inDuckJump))
-                        FinishUnDuckState();
-                    else
-                    {
-                        SetDuckedEyeOffset(
-                            1f - FractionUnDucked(
-                                duckMilliseconds,
-                                TimeToUnduckMilliseconds));
-                        _isCrouched = false;
-                        UpdateBoxCollider(false);
-                    }
-                }
-                else
-                {
-                    // Source restores a fully ducked state when the standing
-                    // hull cannot fit under the ceiling.
-                    _duckAmount = 1f;
-                    _isCrouched = true;
-                    _ducking = false;
-                    SetDuckedEyeOffset(1f);
-                    UpdateBoxCollider(true);
-                }
-            }
-
-            _rawDuckHeld = rawDuckHeld;
-            _wasCrouching = rawDuckHeld;
-        }
-
         private void FinishDuckState()
         {
             if (!_isCrouched && !Grounded && !_wasOnLadder)
@@ -2121,7 +1921,6 @@ namespace RidahFPS.Controllers
             _duckAmount = 1f;
             _ducking = false;
             _isCrouched = true;
-            _duckTimeMilliseconds = DuckTransitionTimeMilliseconds;
             _lastDuckTime = _elapsed;
             SetDuckedEyeOffset(1f);
             UpdateBoxCollider(true);
@@ -2159,7 +1958,6 @@ namespace RidahFPS.Controllers
             _duckAmount = 0f;
             _ducking = false;
             _isCrouched = false;
-            _duckTimeMilliseconds = 0f;
             SetDuckedEyeOffset(0f);
             UpdateBoxCollider(false);
 
@@ -2244,16 +2042,6 @@ namespace RidahFPS.Controllers
 
             return _isCrouched ||
                 _elapsed >= _lastDuckTime + _settings.timeBetweenDucks;
-        }
-
-        private static float FractionDucked(float milliseconds, float duration)
-        {
-            return Mathf.Clamp01(milliseconds / Mathf.Max(0.0001f, duration));
-        }
-
-        private static float FractionUnDucked(float milliseconds, float duration)
-        {
-            return Mathf.Clamp01(milliseconds / Mathf.Max(0.0001f, duration));
         }
 
         private static float SimpleSpline(float value)
@@ -2426,9 +2214,6 @@ namespace RidahFPS.Controllers
 
         private bool TryLadderMove()
         {
-            if (!_surfer.MoveData.laddersEnabled)
-                return false;
-
             Vector3 up = _movementUp;
             Vector3 forward = _surfer.Forward.normalized;
             Vector3 right = _surfer.Right.normalized;
@@ -4018,8 +3803,7 @@ namespace RidahFPS.Controllers
             if (_surfer == null || !_surfer.MoveData.isGravity || _surfer.MoveData.LoseWeight)
                 return 0f;
 
-            return Gravity * Mathf.Max(0f, _surfer.MoveData.GravityFactor) *
-                _sourceGravityScale;
+            return Gravity * _sourceGravityScale;
         }
 
         private float GetStaminaSpeedScale()

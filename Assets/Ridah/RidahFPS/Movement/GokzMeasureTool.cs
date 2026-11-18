@@ -17,7 +17,7 @@ namespace RidahFPS.Controllers
         public Vector3 FirstPoint => firstPoint;
         public Vector3 SecondPoint => secondPoint;
         public float DistanceHu => Vector3.Distance(firstPoint, secondPoint) *
-            GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+            SourceMovementCore.HammerUnitsPerUnityUnit;
 
         public void SetFirstPoint(Vector3 point)
         {

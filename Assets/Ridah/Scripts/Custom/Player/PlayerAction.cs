@@ -256,13 +256,13 @@ namespace GameplayIngredients.Actions
             if (freeze)
             {
                 LZM.Player.MoveEnabled = false;
-                LZM.Player.MoveData.crouchEnabled = false;
+                LZM.Player.crouchingEnabled = false;
                 LZM.Player.jumpEnabled = false;
             }
             else
             {
                 LZM.Player.MoveEnabled = true;
-                LZM.Player.MoveData.crouchEnabled = true;
+                LZM.Player.crouchingEnabled = true;
                 LZM.Player.jumpEnabled = true;
             }
         }

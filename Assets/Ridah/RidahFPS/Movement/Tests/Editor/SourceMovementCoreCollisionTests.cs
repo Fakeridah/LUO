@@ -33,7 +33,6 @@ namespace RidahFPS.Controllers.Tests
                 Origin = _playerObject.transform.position,
                 isGravity = true,
                 reverseGravity = 1f,
-                laddersEnabled = false,
                 verticalAxis = 1f,
                 horizontalAxis = 0f,
                 moveForward = true,
@@ -524,7 +523,6 @@ namespace RidahFPS.Controllers.Tests
             _playerObject.transform.position = new Vector3(0f, 0.2f, 0f);
             _surfer.MoveData.Origin = _playerObject.transform.position;
 
-            _surfer.MoveData.laddersEnabled = true;
             _surfer.MoveData.verticalAxis = 1f;
             _surfer.MoveData.moveForward = true;
 
@@ -544,7 +542,6 @@ namespace RidahFPS.Controllers.Tests
             _extraObject.transform.localScale = new Vector3(2f, 1.4f, 0.1f);
             _extraObject.AddComponent<GokzLadder>();
 
-            _surfer.MoveData.laddersEnabled = true;
             _surfer.MoveData.verticalAxis = 1f;
             _surfer.MoveData.moveForward = true;
             Tick();
@@ -714,7 +711,7 @@ namespace RidahFPS.Controllers.Tests
             return horizontal.magnitude * GokzMovementRules.HammerUnitsPerUnityUnit;
         }
 
-        private sealed class TestSurfer : ISurfControllable
+        private sealed class TestSurfer : IGokzMovementPlayer
         {
             public TestSurfer(
                 CharacterController characterController,
@@ -726,7 +723,6 @@ namespace RidahFPS.Controllers.Tests
                 MoveData = moveData;
             }
 
-            public MoveType MoveType => MoveType.Walk;
             public MoveData MoveData { get; }
             public CharacterController CC { get; }
             public CapsuleCollider Collider { get; }

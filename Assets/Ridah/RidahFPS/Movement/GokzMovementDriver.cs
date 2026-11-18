@@ -3,16 +3,14 @@ using UnityEngine;
 namespace RidahFPS.Controllers
 {
     /// <summary>
-    /// Compatibility facade for existing HUD, replay and diagnostics code.
-    /// The actual movement implementation is SourceMovementCore; this type
-    /// intentionally contains no movement rules of its own.
+    /// Runtime driver for the Source movement core. It exposes Source's tick
+    /// stages and contains no movement rules of its own.
     /// </summary>
-    internal sealed class GokzKzTimerMovement
+    internal sealed class GokzMovementDriver
     {
         public const int TickRate = SourceMovementCore.TickRate;
         public const float TickInterval = SourceMovementCore.TickInterval;
-        public const float HammerUnitsPerUnityUnit =
-            SourceMovementCore.HammerUnitsPerUnityUnit;
+        public const float HammerUnitsPerUnityUnit = SourceMovementCore.HammerUnitsPerUnityUnit;
 
         private readonly SourceMovementCore _core = new SourceMovementCore();
 
@@ -29,13 +27,11 @@ namespace RidahFPS.Controllers
         public GokzMode Mode => _core.Mode;
 
         public void SetMode(GokzMode mode) => _core.SetMode(mode);
-        public void EnableSourceCollision(ISurfControllable surfer) =>
-            _core.EnableSourceCollision(surfer);
-        public void DisableSourceCollision(ISurfControllable surfer) =>
-            _core.DisableSourceCollision(surfer);
-        public void Move(ISurfControllable surfer) => _core.Move(surfer);
-        public void Process(ISurfControllable surfer) => _core.Process(surfer);
-        public void Finish(ISurfControllable surfer) => _core.Finish(surfer);
+        public void EnableSourceCollision(IGokzMovementPlayer player) => _core.EnableSourceCollision(player);
+        public void DisableSourceCollision(IGokzMovementPlayer player) => _core.DisableSourceCollision(player);
+        public void Move(IGokzMovementPlayer player) => _core.Move(player);
+        public void Process(IGokzMovementPlayer player) => _core.Process(player);
+        public void Finish(IGokzMovementPlayer player) => _core.Finish(player);
         public void ResetState() => _core.ResetState();
     }
 }

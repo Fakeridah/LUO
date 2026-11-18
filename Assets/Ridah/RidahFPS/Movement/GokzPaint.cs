@@ -47,7 +47,7 @@ namespace RidahFPS.Controllers
             line.startColor = profile != null ? profile.PaintColor : Color.white;
             line.endColor = line.startColor;
             float size = profile != null ? profile.PaintSize : 4f;
-            line.startWidth = size / GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+            line.startWidth = size / SourceMovementCore.HammerUnitsPerUnityUnit;
             line.endWidth = line.startWidth;
             line.positionCount = 1;
             line.SetPosition(0, point);

@@ -117,7 +117,7 @@ namespace RidahFPS.Controllers
         {
             ResolvePlayer();
             if (runState == GokzRunState.Running)
-                runTime += GokzKzTimerMovement.TickInterval;
+                runTime += SourceMovementCore.TickInterval;
         }
 
         public void SetMode(GokzMode newMode)

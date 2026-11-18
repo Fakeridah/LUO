@@ -1,16 +1,13 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 namespace RidahFPS.Controllers
 {
-    public interface ISurfControllable
+    public interface IGokzMovementPlayer
     {
-        MoveType MoveType { get; }
         MoveData MoveData { get; }
         CharacterController CC { get; }
-        CapsuleCollider Collider { get; }
         Vector3 Forward { get; }
         Vector3 Right { get; }
-        Vector3 Up { get; }
         Vector3 BaseVelocity { get; }
     }
 }

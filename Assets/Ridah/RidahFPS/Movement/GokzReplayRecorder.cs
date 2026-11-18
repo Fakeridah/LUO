@@ -20,7 +20,7 @@ namespace RidahFPS.Controllers
     [Serializable]
     public sealed class GokzReplayClip
     {
-        public int tickRate = GokzKzTimerMovement.TickRate;
+        public int tickRate = SourceMovementCore.TickRate;
         public List<GokzReplayFrame> frames = new List<GokzReplayFrame>();
     }
 
@@ -59,7 +59,7 @@ namespace RidahFPS.Controllers
             {
                 CurrentClip.frames.Add(new GokzReplayFrame
                 {
-                    time = CurrentClip.frames.Count * GokzKzTimerMovement.TickInterval,
+                    time = CurrentClip.frames.Count * SourceMovementCore.TickInterval,
                     position = player.transform.position,
                     rotation = player.transform.rotation,
                     velocity = player.MoveData.Velocity,

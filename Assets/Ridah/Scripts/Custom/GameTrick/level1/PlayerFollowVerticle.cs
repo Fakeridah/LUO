@@ -65,7 +65,7 @@ public class PlayerFollowVerticle : MonoBehaviour
             active = false;
             startAnimation = true;
         }
-        if (!up && (active) && LZM.Player.CC.isGrounded)
+        if (!up && active && LZM.Player.MoveData.grounded)
         {
             LZM.Player.MoveData.isGravity = false;
             LZM.Player.MoveData.Velocity.y -= 1;

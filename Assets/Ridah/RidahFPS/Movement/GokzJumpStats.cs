@@ -106,14 +106,14 @@ namespace RidahFPS.Controllers
                 Vector3 horizontalOffset = Vector3.ProjectOnPlane(offset, up);
                 Vector3 horizontalVelocity = Vector3.ProjectOnPlane(player.MoveData.Velocity, up);
                 float landingSpeed = horizontalVelocity.magnitude *
-                    GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                    SourceMovementCore.HammerUnitsPerUnityUnit;
                 float verticalSpeed = Mathf.Abs(Vector3.Dot(player.MoveData.Velocity, up)) *
-                    GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                    SourceMovementCore.HammerUnitsPerUnityUnit;
                 GokzJumpType jumpType = _lastJumpCount > 1
                     ? GokzJumpType.Bhop
                     : GokzJumpType.LongJump;
                 float distance = horizontalOffset.magnitude *
-                    GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                    SourceMovementCore.HammerUnitsPerUnityUnit;
 
                 LastJump = new GokzJumpResult
                 {

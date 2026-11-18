@@ -230,7 +230,7 @@ namespace RidahFPS.Controllers
             Vector3 up = player.MoveData.reverseGravity < 0f ? Vector3.down : Vector3.up;
             Vector3 velocity = Vector3.ProjectOnPlane(player.MoveData.Velocity, up);
             return velocity.magnitude *
-                   GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                   SourceMovementCore.HammerUnitsPerUnityUnit;
         }
 
         private Color GetSpeedColor(bool grounded)
@@ -240,7 +240,7 @@ namespace RidahFPS.Controllers
 
             Vector3 up = player.MoveData.reverseGravity < 0f ? Vector3.down : Vector3.up;
             float verticalSpeedHu = Vector3.Dot(player.MoveData.Velocity, up) *
-                GokzKzTimerMovement.HammerUnitsPerUnityUnit;
+                SourceMovementCore.HammerUnitsPerUnityUnit;
             bool showDeadStrafe = _profile == null ? showDeadStrafeColor : _profile.DeadStrafe;
             if (showDeadStrafe && verticalSpeedHu > 0f && verticalSpeedHu < 140f)
                 return DeadStrafeRed;
