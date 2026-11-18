@@ -1,0 +1,77 @@
+using NaughtyAttributes;
+using UnityEngine;
+
+namespace GameplayIngredients.Actions
+{
+    [AddComponentMenu("Ridah/TimeKeeper Action")]
+    [HelpURL(Help.URL + "timers")]
+    [Callable("Time", "Misc/ic-timer.png")]
+    public class TimeKeeperAction : ActionBase
+    {
+        public enum Action
+        {
+            Start,
+            SetStopTime,
+            Interrupt,
+            ClearAndStop
+        }
+
+        [NonNullCheck]
+        public TimeKeeper timer;
+        public Action action = Action.Start;
+
+        [ShowIf("isSetTime")]
+        public bool TimeLimited = false;
+        [ShowIf("isSetTime")]
+        public uint Hours = 0;
+        [ShowIf("isSetTime"), Range(0, 59)]
+        public uint Minutes = 1;
+        [ShowIf("isSetTime"), Range(0, 59)]
+        public uint Seconds = 30;
+        [ShowIf("isSetTime"), Range(0, 999)]
+        public uint Milliseconds = 0;
+        [ShowIf("isSetTime")]
+        public bool Restart = false;
+
+
+        public override void Execute(GameObject instigator = null)
+        {
+            if (timer == null)
+            {
+                Debug.LogWarning($"{this.gameObject.name}:{this.name} : Null Timer");
+            }
+            else
+            {
+                switch (action)
+                {
+                    default:
+                    case Action.Start:
+                        timer.Restart(instigator);
+                        break;
+                    case Action.SetStopTime:
+                        if (timer.isRunning)
+                            timer.Interrupt(instigator);
+
+                        timer.TimeLimited = TimeLimited;
+                        timer.Hours = Hours;
+                        timer.Minutes = Minutes;
+                        timer.Seconds = Seconds;
+                        timer.Milliseconds = Milliseconds;
+
+                        if (Restart)
+                            timer.Restart(instigator);
+                        break;
+                    case Action.Interrupt:
+                        timer.Interrupt(instigator);
+                        break;
+                    case Action.ClearAndStop:
+                        timer.ClearAndStop(instigator);
+                        break;
+                }
+            }
+        }
+
+        bool isSetTime() { return action == Action.SetStopTime; }
+    }
+}
+
