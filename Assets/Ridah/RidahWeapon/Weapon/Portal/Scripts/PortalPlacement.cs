@@ -1,8 +1,8 @@
-﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
-using RidahFPS.Controllers;
+using UnityEngine.InputSystem;
 using Ridah.Weapon;
+using RidahFPS.Controllers;
+
 public class PortalPlacement : WeaponController
 {
     [SerializeField]
@@ -10,9 +10,6 @@ public class PortalPlacement : WeaponController
 
     [SerializeField]
     private LayerMask raycastMask;
-
-    [SerializeField]
-    private string[] layerMask;
 
     [SerializeField]
     private Crosshair crosshair;
@@ -23,89 +20,120 @@ public class PortalPlacement : WeaponController
     [SerializeField]
     private GameObject portalGun;
 
-    private void Awake()
-    {
-    }
+    private PlayerInput playerInput;
+    private InputAction portalPrimaryAction;
+    private InputAction portalSecondaryAction;
 
     private void Update()
     {
-        if (Input.GetButtonDown("Fire1")&& portals.isActiveAndEnabled&& portals.Portals[0].placeEabled&& lockShoot&& portalGun.activeInHierarchy)
+        if (portals == null || portals.Portals == null ||
+            portals.Portals.Length < 2)
+            return;
+
+        if (mainCamera == null)
+            mainCamera = Camera.main;
+        if (mainCamera == null)
+            return;
+
+        CachePortalInputActions();
+        bool firePrimary =
+            (portalPrimaryAction != null &&
+                portalPrimaryAction.WasPressedThisFrame()) ||
+            (Mouse.current != null &&
+                Mouse.current.leftButton.wasPressedThisFrame) ||
+            (Gamepad.current != null &&
+                Gamepad.current.buttonSouth.wasPressedThisFrame);
+        bool fireSecondary =
+            (portalSecondaryAction != null &&
+                portalSecondaryAction.WasPressedThisFrame()) ||
+            (Mouse.current != null &&
+                Mouse.current.rightButton.wasPressedThisFrame) ||
+            (Gamepad.current != null &&
+                Gamepad.current.buttonEast.wasPressedThisFrame);
+
+        bool pairActive = portals.isActiveAndEnabled;
+        bool gunActive = portalGun == null || portalGun.activeInHierarchy;
+
+        if (firePrimary && pairActive && gunActive &&
+            portals.Portals[0] != null && portals.Portals[0].placeEabled &&
+            lockShoot)
         {
-            portals.Portals[0].vfx.localScale = 0.01f*Vector3.one;
-            //portals.Portals[0].Renderer.enabled = false;
-            FirePortal(0, mainCamera.transform.position, mainCamera.transform.forward, 250.0f);
+            if (portals.Portals[0].vfx != null)
+                portals.Portals[0].vfx.localScale = 0.01f * Vector3.one;
+            FirePortal(0, mainCamera.transform.position,
+                mainCamera.transform.forward, 250f);
         }
-        else if (Input.GetButtonDown("Fire2") && portals.isActiveAndEnabled && portals.Portals[1].placeEabled&& lockShoot && portalGun.activeInHierarchy)
+        else if (fireSecondary && pairActive && gunActive &&
+            portals.Portals[1] != null && portals.Portals[1].placeEabled &&
+            lockShoot)
         {
-            portals.Portals[1].vfx.localScale = 0.01f * Vector3.one;
-            //portals.Portals[1].Renderer.enabled = false;
-            FirePortal(1, mainCamera.transform.position, mainCamera.transform.forward, 250.0f);
+            if (portals.Portals[1].vfx != null)
+                portals.Portals[1].vfx.localScale = 0.01f * Vector3.one;
+            FirePortal(1, mainCamera.transform.position,
+                mainCamera.transform.forward, 250f);
         }
-        //change!!!!!!!
-        if (portals.Portals[0].Bullet) portals.Portals[0].Bullet.SetActive(!portals.Portals[0].isPlaced);
-        if (portals.Portals[1].Bullet)portals.Portals[1].Bullet.SetActive(!portals.Portals[1].isPlaced);
+
+        if (portals.Portals[0] != null && portals.Portals[0].Bullet != null)
+            portals.Portals[0].Bullet.SetActive(!portals.Portals[0].isPlaced);
+        if (portals.Portals[1] != null && portals.Portals[1].Bullet != null)
+            portals.Portals[1].Bullet.SetActive(!portals.Portals[1].isPlaced);
     }
 
-    private void FirePortal(int portalID, Vector3 pos, Vector3 dir, float distance)
+    private void CachePortalInputActions()
+    {
+        if (portalPrimaryAction != null && portalSecondaryAction != null)
+            return;
+
+        if (playerInput == null && mainCamera != null)
+            playerInput = mainCamera.GetComponentInParent<PlayerInput>();
+        if (playerInput == null && LZM.Player != null)
+            playerInput = LZM.Player.GetComponent<PlayerInput>();
+        if (playerInput == null || playerInput.actions == null)
+            return;
+
+        InputActionMap portalActionMap =
+            playerInput.actions.FindActionMap("FirstRoom", false);
+        if (portalActionMap == null)
+            return;
+
+        if (portalPrimaryAction == null)
+            portalPrimaryAction = portalActionMap.FindAction(
+                "PortalPrimary", false);
+        if (portalSecondaryAction == null)
+            portalSecondaryAction = portalActionMap.FindAction(
+                "PortalSecondary", false);
+    }
+
+    private void FirePortal(int portalID, Vector3 position, Vector3 direction,
+        float distance)
     {
         RaycastHit hit;
-        Physics.Raycast(pos, dir, out hit, distance, raycastMask);
-        //GameObject bullet = Instantiate(portals.Portals[portalID].Bullet, portals.Portals[portalID].Bullet.transform);
-        if (hit.collider != null)
-        {
-            //change!!!!!!!!
-            if (1<<hit.transform.gameObject.layer == LayerMask.GetMask(layerMask[0]))
-            {/*if (hit.collider.tag == "Portal")
-            {
-                var inPortal = hit.collider.GetComponent<Portal>();
-                var outPortal = inPortal.GetOtherPortal();
+        if (!Physics.Raycast(position, direction, out hit, distance,
+            raycastMask, QueryTriggerInteraction.Ignore))
+            return;
 
-                // Update position of raycast origin with small offset.
-                Vector3 relativePos = inPortal.transform.InverseTransformPoint(hit.point + dir);
-                relativePos = Quaternion.Euler(0.0f, 180.0f, 0.0f) * relativePos;
-                pos = outPortal.transform.TransformPoint(relativePos);
+        int wallLayer = LayerMask.NameToLayer("Wall");
+        if (wallLayer < 0 || hit.collider.gameObject.layer != wallLayer)
+            return;
 
-                // Update direction of raycast.
-                Vector3 relativeDir = inPortal.transform.InverseTransformDirection(dir);
-                relativeDir = Quaternion.Euler(0.0f, 180.0f, 0.0f) * relativeDir;
-                dir = outPortal.transform.TransformDirection(relativeDir);
+        Portal portal = portals.Portals[portalID];
+        Vector3 portalForward = -hit.normal;
+        Vector3 portalRight = Vector3.ProjectOnPlane(
+            mainCamera.transform.right, hit.normal);
+        if (portalRight.sqrMagnitude < 0.0001f)
+            portalRight = Vector3.ProjectOnPlane(mainCamera.transform.up,
+                hit.normal);
+        if (portalRight.sqrMagnitude < 0.0001f)
+            return;
 
-                distance -= Vector3.Distance(pos, hit.point);
+        portalRight.Normalize();
+        Vector3 portalUp = Vector3.Cross(portalForward, portalRight).normalized;
+        Quaternion portalRotation = Quaternion.LookRotation(
+            portalForward, portalUp);
 
-                FirePortal(portalID, pos, dir, distance);
-
-                if (inPortal != portals.Portals[portalID])
-                return;
-            }*/
-
-                var cameraRotation = mainCamera.transform.rotation;
-
-                var portalRight = cameraRotation * Vector3.right;
-
-                if (Mathf.Abs(portalRight.x) >= Mathf.Abs(portalRight.z))
-                {
-                    portalRight = (portalRight.x >= 0) ? Vector3.right : -Vector3.right;
-                }
-                else
-                {
-                    portalRight = (portalRight.z >= 0) ? Vector3.forward : -Vector3.forward;
-                }
-
-                var portalForward = -hit.normal;
-                var portalUp = -Vector3.Cross(portalRight, portalForward);
-
-                var portalRotation = Quaternion.LookRotation(portalForward, portalUp);
-
-                portals.Portals[portalID].transform.SetParent(hit.transform);
-                portals.Portals[portalID].PlacePortal(hit.collider, hit.point, portalRotation);
-                crosshair.SetPortalPlaced(portalID, portals.Portals[portalID].isPlaced);
-            }
-            else
-            {
-                portals.Portals[portalID].gameObject.SetActive(false);
-                portals.Portals[portalID].isPlaced = false;
-                crosshair.SetPortalPlaced(portalID, portals.Portals[portalID].isPlaced);
-            }
-        }
+        portal.PlacePortal(hit.collider, hit.point, portalRotation);
+        if (crosshair != null)
+            crosshair.SetPortalPlaced(portalID, portal.isPlaced);
     }
+
 }

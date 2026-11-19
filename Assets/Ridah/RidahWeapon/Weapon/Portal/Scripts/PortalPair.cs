@@ -8,7 +8,10 @@ public class PortalPair : MonoBehaviour
 
     private void Awake()
     {
-        Portals = GetComponentsInChildren<Portal>();
+        // Portal.Start disables unplaced portal children, and the pair itself
+        // is also commonly activated by a gameplay event. Include inactive
+        // children so the firing controller always receives both portals.
+        Portals = GetComponentsInChildren<Portal>(true);
 
         if(Portals.Length != 2)
         {

@@ -180,6 +180,10 @@ namespace RidahFPS.Controllers
         private readonly HashSet<GokzMovementVolume> _consumedSourcePushVolumes =
             new HashSet<GokzMovementVolume>();
         private RaycastHit[] _moveHits = new RaycastHit[16];
+        private Vector3 _lastBoxQueryCenter;
+        private Vector3 _lastBoxQueryHalfExtents;
+        private Quaternion _lastBoxQueryRotation = Quaternion.identity;
+        private Vector3 _lastBoxQuerySweepDelta;
         private BoxCollider _sourceHullCollider;
         private Transform _sourceHullTransform;
         private Rigidbody _sourceRigidbody;
@@ -326,6 +330,7 @@ namespace RidahFPS.Controllers
             Vector3 slideVelocity;
             Vector3 slideFinalVelocity;
             bool hitCollision;
+            bool hitPortalWall;
             TrySlideMove(
                 startPosition,
                 startVelocity,
@@ -335,13 +340,15 @@ namespace RidahFPS.Controllers
                 out slidePosition,
                 out slideVelocity,
                 out slideFinalVelocity,
-                out hitCollision);
+                out hitCollision,
+                out hitPortalWall);
 
             Vector3 bestPosition = slidePosition;
             Vector3 bestVelocity = slideVelocity;
             Vector3 bestFinalVelocity = slideFinalVelocity;
 
-            if (Grounded && _waterJumpTimeMilliseconds <= 0f && hitCollision)
+            if (Grounded && _waterJumpTimeMilliseconds <= 0f &&
+                hitCollision && !hitPortalWall)
             {
                 Vector3 stepPosition;
                 Vector3 stepVelocity;
@@ -391,12 +398,14 @@ namespace RidahFPS.Controllers
             out Vector3 position,
             out Vector3 velocity,
             out Vector3 finalVelocity,
-            out bool hitCollision)
+            out bool hitCollision,
+            out bool hitPortalWall)
         {
             position = startPosition;
             velocity = startVelocity;
             finalVelocity = startFinalVelocity;
             hitCollision = false;
+            hitPortalWall = false;
 
             // GOKZ gokz-momsurffix replaces CGameMovement::TryPlayerMove. Keep
             // its eight bump attempts, five clip planes, grounded first-plane
@@ -551,6 +560,8 @@ namespace RidahFPS.Controllers
                 }
 
                 hitCollision = true;
+                if (Portal.IsPairedPortalWallCollider(nearest.collider))
+                    hitPortalWall = true;
                 if (fraction > 0f)
                 {
                     position += velocity * (timeLeft * fraction);
@@ -826,6 +837,7 @@ namespace RidahFPS.Controllers
             // farther in the floor plane.
             Vector3 downPosition;
             Vector3 downFinalVelocity;
+            bool downHitPortalWall;
             TrySlideMove(
                 startPosition,
                 startVelocity,
@@ -835,7 +847,10 @@ namespace RidahFPS.Controllers
                 out downPosition,
                 out _,
                 out downFinalVelocity,
-                out _);
+                out _,
+                out downHitPortalWall);
+            if (downHitPortalWall)
+                return false;
 
             // Raise the hull. If the full step is blocked, this is not a
             // stair and the ordinary clipped path remains authoritative. A
@@ -850,6 +865,9 @@ namespace RidahFPS.Controllers
             Vector3 raisedPosition;
             if (TryGetNearestHit(upHitCount, out upHit))
             {
+                if (Portal.IsPairedPortalWallCollider(upHit.collider))
+                    return false;
+
                 float availableRise = Mathf.Max(
                     0f,
                     Mathf.Min(
@@ -866,6 +884,7 @@ namespace RidahFPS.Controllers
 
             Vector3 upPosition;
             Vector3 upFinalVelocity;
+            bool upHitPortalWall;
             TrySlideMove(
                 raisedPosition,
                 startVelocity,
@@ -875,7 +894,10 @@ namespace RidahFPS.Controllers
                 out upPosition,
                 out _,
                 out upFinalVelocity,
-                out _);
+                out _,
+                out upHitPortalWall);
+            if (upHitPortalWall)
+                return false;
 
             // StepMove lowers the raised path back onto the walkable surface.
             // A missing/steep hit means Source restores the ordinary path.
@@ -890,6 +912,7 @@ namespace RidahFPS.Controllers
             // so a missing lower hit must restore the ordinary path instead
             // of leaving the player in the air at the full step distance.
             if (!TryGetNearestHit(downHitCount, out downHit) ||
+                Portal.IsPairedPortalWallCollider(downHit.collider) ||
                 Vector3.Dot(downHit.normal, _movementUp) < WalkableNormal)
                 return false;
 
@@ -948,6 +971,13 @@ namespace RidahFPS.Controllers
             int layerMask,
             QueryTriggerInteraction queryTriggerInteraction)
         {
+            _lastBoxQueryCenter = center;
+            _lastBoxQueryHalfExtents = halfExtents;
+            _lastBoxQueryRotation = orientation;
+            _lastBoxQuerySweepDelta = direction.sqrMagnitude > 0.000001f
+                ? direction.normalized * distance
+                : Vector3.zero;
+
             while (true)
             {
                 int hitCount = Physics.BoxCastNonAlloc(
@@ -979,6 +1009,15 @@ namespace RidahFPS.Controllers
             {
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate.collider,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta,
+                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                        _movementUp) ||
                     (_surfer != null && _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform)))
                     continue;
@@ -989,6 +1028,26 @@ namespace RidahFPS.Controllers
                     found = true;
                 }
             }
+
+            Transform movingRoot = _surfer != null
+                ? _surfer.MoveData.playerTransform
+                : null;
+            if (Portal.TryGetPortalSpaceCollision(
+                _lastBoxQueryCenter,
+                _lastBoxQueryHalfExtents,
+                GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                _lastBoxQueryRotation,
+                _movementUp,
+                _lastBoxQuerySweepDelta,
+                GetCollisionMask(),
+                movingRoot,
+                out RaycastHit portalHit) &&
+                portalHit.distance < nearestDistance)
+            {
+                nearest = portalHit;
+                return true;
+            }
+
             return found;
         }
 
@@ -1328,6 +1387,60 @@ namespace RidahFPS.Controllers
             if (Grounded && !_onLadderThisTick &&
                 !_waterJumpProcessedThisTick)
                 RemoveVerticalVelocity(ref _surfer.MoveData.Velocity);
+
+            Vector3 baseVelocityBeforePortal = _baseVelocity;
+            Vector3 portalVelocity = _surfer.MoveData.Velocity;
+            Vector3 portalPosition =
+                _surfer.MoveData.playerTransform.position;
+            PortablePlayer portablePlayer =
+                _surfer.MoveData.playerTransform.GetComponent<PortablePlayer>();
+            bool wasGroundedBeforePortal = Grounded;
+            if (Portal.TryHandlePlayerMovement(
+                portablePlayer,
+                _processStartPosition,
+                ref portalPosition,
+                GetBoxHalfExtents(_isCrouched),
+                GetBoxHalfExtents(true),
+                _movementUp,
+                ref portalVelocity,
+                wasGroundedBeforePortal,
+                GetGravityAcceleration(),
+                TickInterval,
+                out Quaternion portalRotation,
+                out bool forcePortalDuck))
+            {
+                if (forcePortalDuck)
+                    ForcePortalCrouch();
+
+                _baseVelocity = portalRotation * baseVelocityBeforePortal;
+                _sourceTriggerBaseVelocity =
+                    portalRotation * _sourceTriggerBaseVelocity;
+                _surfer.MoveData.Velocity = portalVelocity;
+                _surfer.MoveData.Velocity.x = Mathf.Clamp(
+                    _surfer.MoveData.Velocity.x, -MaxVelocity, MaxVelocity);
+                _surfer.MoveData.Velocity.y = Mathf.Clamp(
+                    _surfer.MoveData.Velocity.y, -MaxVelocity, MaxVelocity);
+                _surfer.MoveData.Velocity.z = Mathf.Clamp(
+                    _surfer.MoveData.Velocity.z, -MaxVelocity, MaxVelocity);
+                _movementVelocity = _surfer.MoveData.Velocity;
+                _surfer.MoveData.playerTransform.position = portalPosition;
+                _surfer.MoveData.Origin = portalPosition;
+
+                // CPortal_Player::ApplyPortalTeleportation drops the entry
+                // ground entity after movement and carries the transformed
+                // base velocity into the next command.
+                Grounded = false;
+                _groundHit = default;
+                _groundNormal = _movementUp;
+                _surfer.MoveData.grounded = false;
+                _surfer.MoveData.groundTransform = null;
+                _surfer.MoveData.SurfaceFriction = 1f;
+                _hasGroundTransformSample = false;
+                _sampledGroundTransform = null;
+                _sampledGroundPosition = Vector3.zero;
+                _sampledGroundVelocity = Vector3.zero;
+                Physics.SyncTransforms();
+            }
 
             // Source calls CMoveHelperServer::ProcessImpacts after
             // ProcessMovement has finished. trigger_push therefore writes
@@ -1714,6 +1827,15 @@ namespace RidahFPS.Controllers
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate.collider,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta,
+                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                        _movementUp) ||
                     (_surfer != null &&
                      _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(
@@ -1725,6 +1847,26 @@ namespace RidahFPS.Controllers
                 nearest = candidate;
                 nearestDistance = candidate.distance;
                 found = true;
+            }
+
+            Transform movingRoot = _surfer != null
+                ? _surfer.MoveData.playerTransform
+                : null;
+            if (Portal.TryGetPortalSpaceCollision(
+                _lastBoxQueryCenter,
+                _lastBoxQueryHalfExtents,
+                GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                _lastBoxQueryRotation,
+                _movementUp,
+                _lastBoxQuerySweepDelta,
+                GetCollisionMask(),
+                movingRoot,
+                out RaycastHit portalHit) &&
+                Vector3.Dot(portalHit.normal, _movementUp) >= WalkableNormal &&
+                portalHit.distance < nearestDistance)
+            {
+                nearest = portalHit;
+                return true;
             }
 
             return found;
@@ -1992,6 +2134,19 @@ namespace RidahFPS.Controllers
             _colliderUp = _movementUp;
         }
 
+        private void ForcePortalCrouch()
+        {
+            if (_isCrouched)
+                return;
+
+            _duckAmount = 1f;
+            _ducking = false;
+            _isCrouched = true;
+            _lastDuckTime = _elapsed;
+            SetDuckedEyeOffset(1f);
+            UpdateBoxCollider(true);
+        }
+
         private bool CanFitHull(float height)
         {
             return CanFitHullAt(_surfer.MoveData.playerTransform.position, height);
@@ -2113,8 +2268,10 @@ namespace RidahFPS.Controllers
         private bool CanFitHullAt(Vector3 basePosition, float height)
         {
             Vector3 center = basePosition + _movementUp * (height * 0.5f);
+            Vector3 hullHalfExtents = new Vector3(
+                HullRadius, height * 0.5f, HullRadius);
             Vector3 halfExtents = GetQueryHalfExtents(
-                new Vector3(HullRadius, height * 0.5f, HullRadius));
+                hullHalfExtents);
             int count = Physics.OverlapBoxNonAlloc(
                 center,
                 halfExtents,
@@ -2127,6 +2284,8 @@ namespace RidahFPS.Controllers
             {
                 Collider collider = _hullOverlaps[i];
                 if (collider == null || collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        collider, center, hullHalfExtents, Quaternion.identity) ||
                     collider.transform.IsChildOf(_surfer.MoveData.playerTransform))
                     continue;
                 return false;
@@ -2152,6 +2311,16 @@ namespace RidahFPS.Controllers
             {
                 Collider collider = _hullOverlaps[i];
                 if (collider == null || collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        collider,
+                        center,
+                        halfExtents,
+                        Quaternion.identity) ||
+                    Portal.ShouldIgnoreStuckRecoveryCollision(
+                        collider,
+                        center,
+                        halfExtents,
+                        Quaternion.identity) ||
                     collider.transform.IsChildOf(
                         _surfer.MoveData.playerTransform))
                     continue;
@@ -2247,6 +2416,13 @@ namespace RidahFPS.Controllers
             {
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate.collider,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta) ||
                     candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform) ||
                     Vector3.Dot(candidate.normal, up) >= 0.999999f ||
                     candidate.distance >= nearestDistance)
@@ -3194,6 +3370,13 @@ namespace RidahFPS.Controllers
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate.collider,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta) ||
                     (_surfer != null &&
                      _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(

@@ -1,5 +1,3 @@
-﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
@@ -8,110 +6,125 @@ using UnityEngine;
 [RequireComponent(typeof(Collider))]
 public class PortalableObject : MonoBehaviour
 {
-    [SerializeField] private float maxSpeed=10;
+    [SerializeField] private float maxSpeed = 10f;
 
     private GameObject cloneObject;
-
-    private int inPortalCount = 0;
-    
+    private int inPortalCount;
     private Portal inPortal;
     private Portal outPortal;
+    private Rigidbody rigidbody;
+    private Collider collider;
 
-    private new Rigidbody rigidbody;
-    protected new Collider collider;
-
-    private static readonly Quaternion halfTurn = Quaternion.Euler(0.0f, 180.0f, 0.0f);
+    private static readonly Quaternion HalfTurn = Quaternion.Euler(0f, 180f, 0f);
 
     protected virtual void Awake()
     {
-        cloneObject = new GameObject();
+        cloneObject = new GameObject(name + " Portal Clone");
         cloneObject.SetActive(false);
-        var meshFilter = cloneObject.AddComponent<MeshFilter>();
-        var meshRenderer = cloneObject.AddComponent<MeshRenderer>();
 
-        meshFilter.mesh = GetComponent<MeshFilter>().mesh;
-        meshRenderer.materials = GetComponent<MeshRenderer>().materials;
+        MeshFilter meshFilter = cloneObject.AddComponent<MeshFilter>();
+        MeshRenderer meshRenderer = cloneObject.AddComponent<MeshRenderer>();
+        meshFilter.sharedMesh = GetComponent<MeshFilter>().sharedMesh;
+        meshRenderer.sharedMaterials = GetComponent<MeshRenderer>().sharedMaterials;
         cloneObject.transform.localScale = transform.localScale;
 
         rigidbody = GetComponent<Rigidbody>();
         collider = GetComponent<Collider>();
     }
 
+    private void OnDestroy()
+    {
+        if (cloneObject != null)
+            Destroy(cloneObject);
+    }
+
     private void LateUpdate()
     {
-        if(inPortal == null || outPortal == null)
-        {
+        if (inPortal == null || outPortal == null)
             return;
-        }
 
-        if(cloneObject.activeSelf && inPortal.isPlaced && outPortal.isPlaced)
+        if (cloneObject.activeSelf && inPortal.isPlaced && outPortal.isPlaced)
         {
-            var inTransform = inPortal.transform;
-            var outTransform = outPortal.transform;
+            Transform inTransform = inPortal.transform;
+            Transform outTransform = outPortal.transform;
 
-            // Update position of clone.
-            Vector3 relativePos = inTransform.InverseTransformPoint(transform.position);
-            relativePos = halfTurn * relativePos;
-            cloneObject.transform.position = outTransform.TransformPoint(relativePos);
-
-            // Update rotation of clone.
-            Quaternion relativeRot = Quaternion.Inverse(inTransform.rotation) * transform.rotation;
-            relativeRot = halfTurn * relativeRot;
-            cloneObject.transform.rotation = outTransform.rotation * relativeRot;
+            Vector3 relativePosition = Quaternion.Inverse(inTransform.rotation) *
+                (transform.position - inTransform.position);
+            relativePosition = HalfTurn * relativePosition;
+            cloneObject.transform.SetPositionAndRotation(
+                outTransform.position + outTransform.rotation * relativePosition,
+                outTransform.rotation *
+                (HalfTurn * (Quaternion.Inverse(inTransform.rotation) *
+                    transform.rotation)));
         }
         else
         {
-            cloneObject.transform.position = new Vector3(-1000.0f, 1000.0f, -1000.0f);
+            cloneObject.transform.position = new Vector3(-1000f, 1000f, -1000f);
         }
     }
 
-    public void SetIsInPortal(Portal inPortal, Portal outPortal, Collider wallCollider)
+    public void SetIsInPortal(Portal inPortal, Portal outPortal,
+        Collider wallCollider)
     {
         this.inPortal = inPortal;
         this.outPortal = outPortal;
 
-        Physics.IgnoreCollision(collider, wallCollider);
+        if (collider != null && wallCollider != null &&
+            collider.enabled && wallCollider.enabled)
+            Physics.IgnoreCollision(collider, wallCollider, true);
 
         cloneObject.SetActive(true);
-
-        ++inPortalCount;
+        inPortalCount++;
     }
-
 
     public void ExitPortal(Collider wallCollider)
     {
-        Physics.IgnoreCollision(collider, wallCollider, false);
-        --inPortalCount;
-        
+        if (collider != null && wallCollider != null &&
+            collider.enabled && wallCollider.enabled)
+            Physics.IgnoreCollision(collider, wallCollider, false);
+
+        inPortalCount = Mathf.Max(0, inPortalCount - 1);
         if (inPortalCount == 0)
-        {
             cloneObject.SetActive(false);
-        }
     }
+
     public virtual void Warp()
     {
-        var inTransform = inPortal.transform;
-        var outTransform = outPortal.transform;
+        if (inPortal == null || outPortal == null ||
+            !inPortal.isPlaced || !outPortal.isPlaced || rigidbody == null)
+            return;
 
-        // Update position of object.
-        Vector3 relativePos = inTransform.InverseTransformPoint(transform.position);
-        relativePos = halfTurn * relativePos;
-        transform.position = outTransform.TransformPoint(relativePos);
+        Transform inTransform = inPortal.transform;
+        Transform outTransform = outPortal.transform;
+        Collider sourceWall = inPortal.WallCollider;
+        Collider destinationWall = outPortal.WallCollider;
 
-        // Update rotation of object.
-        Quaternion relativeRot = Quaternion.Inverse(inTransform.rotation) * transform.rotation;
-        relativeRot = halfTurn * relativeRot;
-        transform.rotation = outTransform.rotation * relativeRot;
+        Vector3 relativePosition = Quaternion.Inverse(inTransform.rotation) *
+            (transform.position - inTransform.position);
+        relativePosition = HalfTurn * relativePosition;
+        transform.position = outTransform.position +
+            outTransform.rotation * relativePosition;
 
-        // Update velocity of rigidbody.
-        Vector3 relativeVel = inTransform.InverseTransformDirection(rigidbody.linearVelocity);
-        relativeVel = halfTurn * relativeVel;
-        rigidbody.linearVelocity = outTransform.TransformDirection(relativeVel);
-        rigidbody.linearVelocity = rigidbody.linearVelocity.normalized * Mathf.Clamp(rigidbody.linearVelocity.magnitude, 0, maxSpeed);
+        Quaternion relativeRotation = HalfTurn *
+            (Quaternion.Inverse(inTransform.rotation) * transform.rotation);
+        transform.rotation = outTransform.rotation * relativeRotation;
 
-        // Swap portal references.
-        var tmp = inPortal;
+        Vector3 relativeVelocity = HalfTurn *
+            inTransform.InverseTransformDirection(rigidbody.linearVelocity);
+        rigidbody.linearVelocity = Vector3.ClampMagnitude(
+            outTransform.TransformDirection(relativeVelocity), maxSpeed);
+
+        if (collider != null)
+        {
+            if (sourceWall != null && sourceWall.enabled && collider.enabled)
+                Physics.IgnoreCollision(collider, sourceWall, false);
+            if (destinationWall != null && destinationWall.enabled &&
+                collider.enabled)
+                Physics.IgnoreCollision(collider, destinationWall, true);
+        }
+
+        Portal previousPortal = inPortal;
         inPortal = outPortal;
-        outPortal = tmp;
+        outPortal = previousPortal;
     }
 }

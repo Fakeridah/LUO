@@ -1,9 +1,8 @@
-﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using RenderPipeline = UnityEngine.Rendering.RenderPipelineManager;
+
 public class RecursivePortalCamera : MonoBehaviour
 {
     [SerializeField]
@@ -17,19 +16,78 @@ public class RecursivePortalCamera : MonoBehaviour
 
     private RenderTexture tempTexture1;
     private RenderTexture tempTexture2;
+    private int textureWidth;
+    private int textureHeight;
+    private bool rendering;
 
     private const int iterations = 1;
 
     private void Awake()
     {
-        tempTexture1 = new RenderTexture(Screen.width, Screen.height, 24, RenderTextureFormat.ARGB32);
-        tempTexture2 = new RenderTexture(Screen.width, Screen.height, 24, RenderTextureFormat.ARGB32);
+        ResolveCameras();
+        EnsureRenderTextures();
     }
+
     private void Start()
     {
-        if(portals[0]!=null)
+        ResolveCameras();
+        EnsureRenderTextures();
+        BindTextures();
+    }
+
+    private void ResolveCameras()
+    {
+        if (mainCamera == null)
+            mainCamera = Camera.main;
+        if (portalCamera == null)
+            portalCamera = GetComponentInChildren<Camera>(true);
+    }
+
+    private void EnsureRenderTextures()
+    {
+        int width = mainCamera != null ? mainCamera.pixelWidth : Screen.width;
+        int height = mainCamera != null ? mainCamera.pixelHeight : Screen.height;
+        width = Mathf.Max(1, width);
+        height = Mathf.Max(1, height);
+
+        if (tempTexture1 != null && tempTexture2 != null &&
+            textureWidth == width && textureHeight == height)
+            return;
+
+        if (tempTexture1 != null)
+            tempTexture1.Release();
+        if (tempTexture2 != null)
+            tempTexture2.Release();
+
+        textureWidth = width;
+        textureHeight = height;
+        tempTexture1 = CreateTexture("PortalViewA", width, height);
+        tempTexture2 = CreateTexture("PortalViewB", width, height);
+    }
+
+    private static RenderTexture CreateTexture(string textureName, int width,
+        int height)
+    {
+        RenderTexture texture = new RenderTexture(width, height, 24,
+            RenderTextureFormat.ARGB32)
+        {
+            name = textureName,
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            useMipMap = false,
+            autoGenerateMips = false
+        };
+        texture.Create();
+        return texture;
+    }
+
+    private void BindTextures()
+    {
+        if (portals != null && portals.Length > 0 && portals[0] != null &&
+            portals[0].Renderer != null)
             portals[0].Renderer.material.mainTexture = tempTexture1;
-        if (portals[1] != null )
+        if (portals != null && portals.Length > 1 && portals[1] != null &&
+            portals[1].Renderer != null)
             portals[1].Renderer.material.mainTexture = tempTexture2;
     }
 
@@ -37,38 +95,56 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         RenderPipeline.beginCameraRendering += UpdateCamera;
     }
+
     private void OnDisable()
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
     }
 
-     void UpdateCamera(ScriptableRenderContext SRC, Camera camera)
+    private void OnDestroy()
     {
-        if (!portals[0].isPlaced || !portals[1].isPlaced)
-        {
-            return;
-        }
+        RenderPipeline.beginCameraRendering -= UpdateCamera;
+        if (tempTexture1 != null)
+            tempTexture1.Release();
+        if (tempTexture2 != null)
+            tempTexture2.Release();
+    }
 
-        if (portals[0].Renderer.isVisible)
+    private void UpdateCamera(ScriptableRenderContext context, Camera camera)
+    {
+        ResolveCameras();
+        if (camera != mainCamera || mainCamera == null || portalCamera == null ||
+            portals == null || portals.Length < 2 || portals[0] == null ||
+            portals[1] == null || !portals[0].isPlaced ||
+            !portals[1].isPlaced)
+            return;
+
+        EnsureRenderTextures();
+        BindTextures();
+        if (rendering)
+            return;
+
+        rendering = true;
+        try
         {
             portalCamera.targetTexture = tempTexture1;
             for (int i = iterations - 1; i >= 0; --i)
-            {
-                RenderCamera(portals[0], portals[1], i,SRC);
-            }
-        }
+                RenderCamera(portals[0], portals[1], i, context);
 
-        if(portals[1].Renderer.isVisible)
-        {
             portalCamera.targetTexture = tempTexture2;
             for (int i = iterations - 1; i >= 0; --i)
-            {
-                RenderCamera(portals[1], portals[0], i,SRC);
-            }
+                RenderCamera(portals[1], portals[0], i, context);
+        }
+        finally
+        {
+            portalCamera.targetTexture = null;
+            portalCamera.ResetProjectionMatrix();
+            rendering = false;
         }
     }
 
-    private void RenderCamera(Portal inPortal, Portal outPortal, int iterationID,ScriptableRenderContext SRC)
+    private void RenderCamera(Portal inPortal, Portal outPortal,
+        int iterationID, ScriptableRenderContext context)
     {
         Transform inTransform = inPortal.transform;
         Transform outTransform = outPortal.transform;
@@ -77,29 +153,29 @@ public class RecursivePortalCamera : MonoBehaviour
         cameraTransform.position = mainCamera.transform.position;
         cameraTransform.rotation = mainCamera.transform.rotation;
 
-        for(int i = 0; i <= iterationID; ++i)
+        for (int i = 0; i <= iterationID; ++i)
         {
-            // Position the camera behind the other portal.
-            Vector3 relativePos = inTransform.InverseTransformPoint(cameraTransform.position);
-            relativePos = Quaternion.Euler(0.0f, 180.0f, 0.0f) * relativePos;
-            cameraTransform.position = outTransform.TransformPoint(relativePos);
+            Vector3 relativePosition = Quaternion.Inverse(inTransform.rotation) *
+                (cameraTransform.position - inTransform.position);
+            relativePosition = Quaternion.Euler(0f, 180f, 0f) * relativePosition;
+            cameraTransform.position = outTransform.position +
+                outTransform.rotation * relativePosition;
 
-            // Rotate the camera to look through the other portal.
-            Quaternion relativeRot = Quaternion.Inverse(inTransform.rotation) * cameraTransform.rotation;
-            relativeRot = Quaternion.Euler(0.0f, 180.0f, 0.0f) * relativeRot;
-            cameraTransform.rotation = outTransform.rotation * relativeRot;
+            Quaternion relativeRotation = Quaternion.Inverse(inTransform.rotation) *
+                cameraTransform.rotation;
+            relativeRotation = Quaternion.Euler(0f, 180f, 0f) * relativeRotation;
+            cameraTransform.rotation = outTransform.rotation * relativeRotation;
         }
 
-        // Set the camera's oblique view frustum.
-        Plane p = new Plane(-outTransform.forward, outTransform.position);
-        Vector4 clipPlaneWorldSpace = new Vector4(p.normal.x, p.normal.y, p.normal.z, p.distance);
+        Plane plane = new Plane(-outTransform.forward, outTransform.position);
+        Vector4 clipPlaneWorldSpace = new Vector4(
+            plane.normal.x, plane.normal.y, plane.normal.z, plane.distance);
         Vector4 clipPlaneCameraSpace =
-            Matrix4x4.Transpose(Matrix4x4.Inverse(portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
+            Matrix4x4.Transpose(Matrix4x4.Inverse(
+                portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
 
-        var newMatrix = mainCamera.CalculateObliqueMatrix(clipPlaneCameraSpace);
-        portalCamera.projectionMatrix = newMatrix;
-
-        // Render the camera to its render target.
-        UniversalRenderPipeline.RenderSingleCamera(SRC, portalCamera);
+        portalCamera.projectionMatrix = mainCamera.CalculateObliqueMatrix(
+            clipPlaneCameraSpace);
+        UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
     }
 }

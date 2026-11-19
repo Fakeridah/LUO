@@ -9,6 +9,6 @@ public class SimplePortal : MonoBehaviour
     public bool otherPlaced = false;
     private void Update()
     {
-        otherPlaced = otherPortal.isActiveAndEnabled;
+        otherPlaced = otherPortal != null && otherPortal.isActiveAndEnabled;
     }
 }

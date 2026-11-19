@@ -221,6 +221,26 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
                     ""interactions"": """",
                     ""initialStateCheck"": false,
                     ""priority"": 0
+                },
+                {
+                    ""name"": ""PortalPrimary"",
+                    ""type"": ""Button"",
+                    ""id"": ""6e873069-1a66-4327-9b77-490eb83c33eb"",
+                    ""expectedControlType"": ""Button"",
+                    ""processors"": """",
+                    ""interactions"": """",
+                    ""initialStateCheck"": false,
+                    ""priority"": 0
+                },
+                {
+                    ""name"": ""PortalSecondary"",
+                    ""type"": ""Button"",
+                    ""id"": ""cd306b0c-aa15-413d-a23a-170d848816df"",
+                    ""expectedControlType"": ""Button"",
+                    ""processors"": """",
+                    ""interactions"": """",
+                    ""initialStateCheck"": false,
+                    ""priority"": 0
                 }
             ],
             ""bindings"": [
@@ -366,6 +386,50 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
                     ""action"": ""PaintHold"",
                     ""isComposite"": false,
                     ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""3fc04ffb-5775-4d87-96f2-a3a6ae9e7f8d"",
+                    ""path"": ""<Mouse>/leftButton"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": ""Keyboard"",
+                    ""action"": ""PortalPrimary"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""8f980089-043f-4b93-a669-f52e69faab5a"",
+                    ""path"": ""<Mouse>/rightButton"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": ""Keyboard"",
+                    ""action"": ""PortalSecondary"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""869ea270-dbc6-4c1a-9a12-9ddb5d5c6671"",
+                    ""path"": ""<Gamepad>/buttonSouth"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": ""Gamepad"",
+                    ""action"": ""PortalPrimary"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""5d961925-ad17-4b08-b9be-c80dfba15ab2"",
+                    ""path"": ""<Gamepad>/buttonEast"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": ""Gamepad"",
+                    ""action"": ""PortalSecondary"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
                 }
             ]
         }
@@ -377,6 +441,22 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
             ""devices"": [
                 {
                     ""devicePath"": ""<Keyboard>"",
+                    ""isOptional"": false,
+                    ""isOR"": false
+                },
+                {
+                    ""devicePath"": ""<Mouse>"",
+                    ""isOptional"": true,
+                    ""isOR"": false
+                }
+            ]
+        },
+        {
+            ""name"": ""Gamepad"",
+            ""bindingGroup"": ""Gamepad"",
+            ""devices"": [
+                {
+                    ""devicePath"": ""<Gamepad>"",
                     ""isOptional"": false,
                     ""isOR"": false
                 }
@@ -399,6 +479,8 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         m_FirstRoom_Reset = m_FirstRoom.FindAction("Reset", throwIfNotFound: true);
         m_FirstRoom_SpeedUp = m_FirstRoom.FindAction("SpeedUp", throwIfNotFound: true);
         m_FirstRoom_PaintHold = m_FirstRoom.FindAction("PaintHold", throwIfNotFound: true);
+        m_FirstRoom_PortalPrimary = m_FirstRoom.FindAction("PortalPrimary", throwIfNotFound: true);
+        m_FirstRoom_PortalSecondary = m_FirstRoom.FindAction("PortalSecondary", throwIfNotFound: true);
     }
 
     ~@RidahPlayerInput()
@@ -492,6 +574,8 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
     private readonly InputAction m_FirstRoom_Reset;
     private readonly InputAction m_FirstRoom_SpeedUp;
     private readonly InputAction m_FirstRoom_PaintHold;
+    private readonly InputAction m_FirstRoom_PortalPrimary;
+    private readonly InputAction m_FirstRoom_PortalSecondary;
     /// <summary>
     /// Provides access to input actions defined in input action map "FirstRoom".
     /// </summary>
@@ -555,6 +639,14 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         /// Provides access to the underlying input action "FirstRoom/PaintHold".
         /// </summary>
         public InputAction @PaintHold => m_Wrapper.m_FirstRoom_PaintHold;
+        /// <summary>
+        /// Provides access to the underlying input action "FirstRoom/PortalPrimary".
+        /// </summary>
+        public InputAction @PortalPrimary => m_Wrapper.m_FirstRoom_PortalPrimary;
+        /// <summary>
+        /// Provides access to the underlying input action "FirstRoom/PortalSecondary".
+        /// </summary>
+        public InputAction @PortalSecondary => m_Wrapper.m_FirstRoom_PortalSecondary;
         /// <summary>
         /// Provides access to the underlying input action map instance.
         /// </summary>
@@ -620,6 +712,12 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
             @PaintHold.started += instance.OnPaintHold;
             @PaintHold.performed += instance.OnPaintHold;
             @PaintHold.canceled += instance.OnPaintHold;
+            @PortalPrimary.started += instance.OnPortalPrimary;
+            @PortalPrimary.performed += instance.OnPortalPrimary;
+            @PortalPrimary.canceled += instance.OnPortalPrimary;
+            @PortalSecondary.started += instance.OnPortalSecondary;
+            @PortalSecondary.performed += instance.OnPortalSecondary;
+            @PortalSecondary.canceled += instance.OnPortalSecondary;
         }
 
         /// <summary>
@@ -670,6 +768,12 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
             @PaintHold.started -= instance.OnPaintHold;
             @PaintHold.performed -= instance.OnPaintHold;
             @PaintHold.canceled -= instance.OnPaintHold;
+            @PortalPrimary.started -= instance.OnPortalPrimary;
+            @PortalPrimary.performed -= instance.OnPortalPrimary;
+            @PortalPrimary.canceled -= instance.OnPortalPrimary;
+            @PortalSecondary.started -= instance.OnPortalSecondary;
+            @PortalSecondary.performed -= instance.OnPortalSecondary;
+            @PortalSecondary.canceled -= instance.OnPortalSecondary;
         }
 
         /// <summary>
@@ -714,6 +818,19 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         {
             if (m_KeyboardSchemeIndex == -1) m_KeyboardSchemeIndex = asset.FindControlSchemeIndex("Keyboard");
             return asset.controlSchemes[m_KeyboardSchemeIndex];
+        }
+    }
+    private int m_GamepadSchemeIndex = -1;
+    /// <summary>
+    /// Provides access to the input control scheme.
+    /// </summary>
+    /// <seealso cref="UnityEngine.InputSystem.InputControlScheme" />
+    public InputControlScheme GamepadScheme
+    {
+        get
+        {
+            if (m_GamepadSchemeIndex == -1) m_GamepadSchemeIndex = asset.FindControlSchemeIndex("Gamepad");
+            return asset.controlSchemes[m_GamepadSchemeIndex];
         }
     }
     /// <summary>
@@ -814,5 +931,19 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
         /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
         void OnPaintHold(InputAction.CallbackContext context);
+        /// <summary>
+        /// Method invoked when associated input action "PortalPrimary" is either <see cref="UnityEngine.InputSystem.InputAction.started" />, <see cref="UnityEngine.InputSystem.InputAction.performed" /> or <see cref="UnityEngine.InputSystem.InputAction.canceled" />.
+        /// </summary>
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.started" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
+        void OnPortalPrimary(InputAction.CallbackContext context);
+        /// <summary>
+        /// Method invoked when associated input action "PortalSecondary" is either <see cref="UnityEngine.InputSystem.InputAction.started" />, <see cref="UnityEngine.InputSystem.InputAction.performed" /> or <see cref="UnityEngine.InputSystem.InputAction.canceled" />.
+        /// </summary>
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.started" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
+        void OnPortalSecondary(InputAction.CallbackContext context);
     }
 }

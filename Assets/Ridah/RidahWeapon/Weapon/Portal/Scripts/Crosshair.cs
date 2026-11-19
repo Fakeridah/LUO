@@ -16,6 +16,11 @@ public class Crosshair : MonoBehaviour
 
     private void Start()
     {
+        if (portalPair == null || portalPair.Portals == null ||
+            portalPair.Portals.Length < 2 || inPortalImg == null ||
+            outPortalImg == null)
+            return;
+
         var portals = portalPair.Portals;
 
         inPortalImg.color = portals[0].GetColour();
@@ -27,13 +32,18 @@ public class Crosshair : MonoBehaviour
 
     public void SetPortalPlaced(int portalID, bool isPlaced)
     {
+        if (portalID < 0 || portalID > 1)
+            return;
+
         if(portalID == 0)
         {
-            inPortalImg.gameObject.SetActive(isPlaced);
+            if (inPortalImg != null)
+                inPortalImg.gameObject.SetActive(isPlaced);
         }
         else
         {
-            outPortalImg.gameObject.SetActive(isPlaced);
+            if (outPortalImg != null)
+                outPortalImg.gameObject.SetActive(isPlaced);
         }
     }
 }
