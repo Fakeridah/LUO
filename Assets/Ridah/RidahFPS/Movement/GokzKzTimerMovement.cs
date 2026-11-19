@@ -498,7 +498,8 @@ namespace RidahFPS.Controllers
                 Vector3 direction = velocity / velocity.magnitude;
                 int hitCount = SweepBox(position, halfExtents, direction, distance);
                 RaycastHit nearest;
-                bool hit = TryGetNearestHit(hitCount, out nearest);
+                bool hit = TryGetNearestHit(
+                    hitCount, out nearest, out bool contactedPortalRamp);
                 Vector3 endPosition = position + velocity * timeLeft;
                 // Unity casts use a slightly inset hull. Their contact point
                 // is therefore one skin farther along the path than the
@@ -526,7 +527,8 @@ namespace RidahFPS.Controllers
                         halfExtents,
                         nearest,
                         traceEndPosition,
-                        fraction))
+                        fraction,
+                        contactedPortalRamp))
                 {
                     lastTracePlane = nearest.normal.normalized;
                     hasValidPlane = false;
@@ -560,7 +562,11 @@ namespace RidahFPS.Controllers
                 }
 
                 hitCollision = true;
-                if (Portal.IsPairedPortalWallCollider(nearest.collider))
+                if (Portal.IsPairedPortalWallContact(
+                    nearest,
+                    _lastBoxQueryHalfExtents +
+                        Vector3.one * CollisionSkin,
+                    _lastBoxQueryRotation))
                     hitPortalWall = true;
                 if (fraction > 0f)
                 {
@@ -687,7 +693,8 @@ namespace RidahFPS.Controllers
             Vector3 halfExtents,
             RaycastHit hit,
             Vector3 traceEndPosition,
-            float fraction)
+            float fraction,
+            bool contactedPortalRamp)
         {
             if (IsHullStuckAt(startPosition, halfExtents))
                 return false;
@@ -701,7 +708,8 @@ namespace RidahFPS.Controllers
             bool sourcePlaneTypeAtLeastZ = !axisAlignedSidePlane;
             if (fraction <= SourcePlaneEpsilon &&
                 sourcePlaneTypeAtLeastZ &&
-                vertical < WalkableNormal)
+                vertical < WalkableNormal &&
+                !(contactedPortalRamp && vertical > 0f))
                 return false;
 
             // gokz-momsurffix::IsValidMovementTrace also performs a stationary
@@ -865,7 +873,11 @@ namespace RidahFPS.Controllers
             Vector3 raisedPosition;
             if (TryGetNearestHit(upHitCount, out upHit))
             {
-                if (Portal.IsPairedPortalWallCollider(upHit.collider))
+                if (Portal.IsPairedPortalWallContact(
+                    upHit,
+                    _lastBoxQueryHalfExtents +
+                        Vector3.one * CollisionSkin,
+                    _lastBoxQueryRotation))
                     return false;
 
                 float availableRise = Mathf.Max(
@@ -911,9 +923,19 @@ namespace RidahFPS.Controllers
             // stepped path.  An empty trace has a zero/default plane normal,
             // so a missing lower hit must restore the ordinary path instead
             // of leaving the player in the air at the full step distance.
-            if (!TryGetNearestHit(downHitCount, out downHit) ||
-                Portal.IsPairedPortalWallCollider(downHit.collider) ||
-                Vector3.Dot(downHit.normal, _movementUp) < WalkableNormal)
+            bool downHitFound = TryGetNearestHit(
+                downHitCount, out downHit, out bool downHitPortalRamp);
+            float downNormal = downHitFound
+                ? Vector3.Dot(downHit.normal, _movementUp)
+                : 0f;
+            if (!downHitFound ||
+                Portal.IsPairedPortalWallContact(
+                    downHit,
+                    _lastBoxQueryHalfExtents +
+                        Vector3.one * CollisionSkin,
+                    _lastBoxQueryRotation) ||
+                (downNormal < WalkableNormal &&
+                 !(downHitPortalRamp && downNormal > 0f)))
                 return false;
 
             float safeDownDistance = Mathf.Clamp(
@@ -1002,7 +1024,16 @@ namespace RidahFPS.Controllers
 
         private bool TryGetNearestHit(int hitCount, out RaycastHit nearest)
         {
+            return TryGetNearestHit(hitCount, out nearest, out _);
+        }
+
+        private bool TryGetNearestHit(
+            int hitCount,
+            out RaycastHit nearest,
+            out bool contactedPortalTransitionRamp)
+        {
             nearest = default;
+            contactedPortalTransitionRamp = false;
             float nearestDistance = float.PositiveInfinity;
             bool found = false;
             for (int i = 0; i < hitCount; i++)
@@ -1010,7 +1041,7 @@ namespace RidahFPS.Controllers
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
                     Portal.ShouldIgnoreMovementCollision(
-                        candidate.collider,
+                        candidate,
                         _lastBoxQueryCenter,
                         _lastBoxQueryHalfExtents +
                             Vector3.one * CollisionSkin,
@@ -1041,10 +1072,12 @@ namespace RidahFPS.Controllers
                 _lastBoxQuerySweepDelta,
                 GetCollisionMask(),
                 movingRoot,
-                out RaycastHit portalHit) &&
+                out RaycastHit portalHit,
+                out bool portalRampContact) &&
                 portalHit.distance < nearestDistance)
             {
                 nearest = portalHit;
+                contactedPortalTransitionRamp = portalRampContact;
                 return true;
             }
 
@@ -1828,7 +1861,7 @@ namespace RidahFPS.Controllers
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider ||
                     Portal.ShouldIgnoreMovementCollision(
-                        candidate.collider,
+                        candidate,
                         _lastBoxQueryCenter,
                         _lastBoxQueryHalfExtents +
                             Vector3.one * CollisionSkin,
@@ -1861,8 +1894,11 @@ namespace RidahFPS.Controllers
                 _lastBoxQuerySweepDelta,
                 GetCollisionMask(),
                 movingRoot,
-                out RaycastHit portalHit) &&
-                Vector3.Dot(portalHit.normal, _movementUp) >= WalkableNormal &&
+                out RaycastHit portalHit,
+                out bool portalRampContact) &&
+                (Vector3.Dot(portalHit.normal, _movementUp) >= WalkableNormal ||
+                 (portalRampContact &&
+                  Vector3.Dot(portalHit.normal, _movementUp) > 0f)) &&
                 portalHit.distance < nearestDistance)
             {
                 nearest = portalHit;
@@ -2417,12 +2453,14 @@ namespace RidahFPS.Controllers
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
                     Portal.ShouldIgnoreMovementCollision(
-                        candidate.collider,
+                        candidate,
                         _lastBoxQueryCenter,
                         _lastBoxQueryHalfExtents +
                             Vector3.one * CollisionSkin,
                         _lastBoxQueryRotation,
-                        _lastBoxQuerySweepDelta) ||
+                        _lastBoxQuerySweepDelta,
+                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                        _movementUp) ||
                     candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform) ||
                     Vector3.Dot(candidate.normal, up) >= 0.999999f ||
                     candidate.distance >= nearestDistance)
@@ -2666,8 +2704,16 @@ namespace RidahFPS.Controllers
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
 
-            if (!TryGetNearestHit(hitCount, out RaycastHit groundHit) ||
-                Vector3.Dot(groundHit.normal, _movementUp) < WalkableNormal)
+            if (!TryGetNearestHit(
+                    hitCount,
+                    out RaycastHit groundHit,
+                    out bool contactedPortalRamp))
+                return;
+
+            float groundNormal = Vector3.Dot(
+                groundHit.normal, _movementUp);
+            if (groundNormal < WalkableNormal &&
+                !(contactedPortalRamp && groundNormal > 0f))
                 return;
 
             float safeDistance = Mathf.Clamp(
@@ -3371,7 +3417,7 @@ namespace RidahFPS.Controllers
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider ||
                     Portal.ShouldIgnoreMovementCollision(
-                        candidate.collider,
+                        candidate,
                         _lastBoxQueryCenter,
                         _lastBoxQueryHalfExtents +
                             Vector3.one * CollisionSkin,

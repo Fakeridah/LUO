@@ -125,6 +125,11 @@ public class RecursivePortalCamera : MonoBehaviour
             return;
 
         rendering = true;
+        RenderTexture previousTarget = portalCamera.targetTexture;
+        Vector3 previousPosition = portalCamera.transform.position;
+        Quaternion previousRotation = portalCamera.transform.rotation;
+        Matrix4x4 previousView = portalCamera.worldToCameraMatrix;
+        Matrix4x4 previousProjection = portalCamera.projectionMatrix;
         try
         {
             portalCamera.targetTexture = tempTexture1;
@@ -137,8 +142,11 @@ public class RecursivePortalCamera : MonoBehaviour
         }
         finally
         {
-            portalCamera.targetTexture = null;
-            portalCamera.ResetProjectionMatrix();
+            portalCamera.targetTexture = previousTarget;
+            portalCamera.transform.SetPositionAndRotation(
+                previousPosition, previousRotation);
+            portalCamera.worldToCameraMatrix = previousView;
+            portalCamera.projectionMatrix = previousProjection;
             rendering = false;
         }
     }
@@ -152,6 +160,7 @@ public class RecursivePortalCamera : MonoBehaviour
         Transform cameraTransform = portalCamera.transform;
         cameraTransform.position = mainCamera.transform.position;
         cameraTransform.rotation = mainCamera.transform.rotation;
+        portalCamera.ResetWorldToCameraMatrix();
 
         for (int i = 0; i <= iterationID; ++i)
         {
@@ -167,14 +176,23 @@ public class RecursivePortalCamera : MonoBehaviour
             cameraTransform.rotation = outTransform.rotation * relativeRotation;
         }
 
-        Plane plane = new Plane(-outTransform.forward, outTransform.position);
+        Vector3 clipNormal = -outTransform.forward;
+        if (Vector3.Dot(
+                clipNormal,
+                cameraTransform.position - outTransform.position) < 0f)
+            clipNormal = -clipNormal;
+
+        Plane plane = new Plane(
+            clipNormal,
+            outTransform.position + clipNormal * 0.01f);
         Vector4 clipPlaneWorldSpace = new Vector4(
             plane.normal.x, plane.normal.y, plane.normal.z, plane.distance);
         Vector4 clipPlaneCameraSpace =
             Matrix4x4.Transpose(Matrix4x4.Inverse(
                 portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
 
-        portalCamera.projectionMatrix = mainCamera.CalculateObliqueMatrix(
+        portalCamera.projectionMatrix = mainCamera.projectionMatrix;
+        portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
             clipPlaneCameraSpace);
         UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
     }

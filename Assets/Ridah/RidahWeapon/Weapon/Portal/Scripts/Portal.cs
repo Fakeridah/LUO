@@ -14,6 +14,7 @@ public class Portal : MonoBehaviour
     private const float PlayerCutoutDepth = 0.05f;
     private const float PlayerCutoutMargin = 0.35f;
     private const float PlayerCutoutTolerance = 0.02f;
+    private const float HammerUnitsPerUnityUnit = 52.4934383202f;
 
     public bool activeStart = false;
     public bool isPlaced = false;
@@ -436,6 +437,66 @@ public class Portal : MonoBehaviour
             movementUp);
     }
 
+    public static bool ShouldIgnoreMovementCollision(
+        RaycastHit hit,
+        Vector3 hullCenter,
+        Vector3 hullHalfExtents,
+        Quaternion hullRotation,
+        Vector3 hullSweepDelta)
+    {
+        return ShouldIgnoreMovementCollision(
+            hit,
+            hullCenter,
+            hullHalfExtents,
+            hullRotation,
+            hullSweepDelta,
+            Vector3.zero,
+            Vector3.up);
+    }
+
+    public static bool ShouldIgnoreMovementCollision(
+        RaycastHit hit,
+        Vector3 hullCenter,
+        Vector3 hullHalfExtents,
+        Quaternion hullRotation,
+        Vector3 hullSweepDelta,
+        Vector3 duckHullHalfExtents,
+        Vector3 movementUp)
+    {
+        Collider candidate = hit.collider;
+        if (candidate == null)
+            return false;
+        if (IsPortalOwnedCollider(candidate))
+            return true;
+
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal portal = ActivePortals[i];
+            if (!HasActivePair(portal) ||
+                (candidate != portal.wallCollider &&
+                 !candidate.transform.IsChildOf(portal.wallCollider.transform)))
+                continue;
+
+            Vector3 apertureHalfExtents = hullHalfExtents;
+            if (duckHullHalfExtents.sqrMagnitude > 0.000001f &&
+                ShouldForcePortalCrouch(portal, movementUp))
+                apertureHalfExtents = duckHullHalfExtents;
+
+            if (FitsPortalWallPassage(
+                    portal,
+                    hullCenter,
+                    apertureHalfExtents,
+                    hullRotation,
+                    hullSweepDelta,
+                    false) &&
+                IsPortalOpeningContact(
+                    portal, hit.point, apertureHalfExtents, hullRotation))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Stuck recovery treats portal-wall penetration as recoverable while the
     /// queried hull overlaps the aperture, including when the query is for a
@@ -529,6 +590,31 @@ public class Portal : MonoBehaviour
 
             if (candidate == portal.wallCollider ||
                 candidate.transform.IsChildOf(portal.wallCollider.transform))
+                return true;
+        }
+
+        return false;
+    }
+
+    public static bool IsPairedPortalWallContact(
+        RaycastHit hit,
+        Vector3 hullHalfExtents,
+        Quaternion hullRotation)
+    {
+        Collider candidate = hit.collider;
+        if (candidate == null)
+            return false;
+
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal portal = ActivePortals[i];
+            if (!HasActivePair(portal) ||
+                (candidate != portal.wallCollider &&
+                 !candidate.transform.IsChildOf(portal.wallCollider.transform)))
+                continue;
+
+            if (IsPortalOpeningContact(
+                portal, hit.point, hullHalfExtents, hullRotation))
                 return true;
         }
 
@@ -673,9 +759,11 @@ public class Portal : MonoBehaviour
         Vector3 sweepDelta,
         int layerMask,
         Transform movingRoot,
-        out RaycastHit nearest)
+        out RaycastHit nearest,
+        out bool contactedTransitionRamp)
     {
         nearest = default;
+        contactedTransitionRamp = false;
         float localDistance = sweepDelta.magnitude;
         if (localDistance <= 0.000001f)
             return false;
@@ -742,6 +830,13 @@ public class Portal : MonoBehaviour
             if (remoteDistance <= 0.000001f)
                 continue;
 
+            bool rampContact = TryGetTransitionRampContact(
+                exit,
+                remoteStart,
+                remoteDelta,
+                remoteHalfExtents,
+                out float rampFraction);
+
             int hitCount;
             while (true)
             {
@@ -773,7 +868,7 @@ public class Portal : MonoBehaviour
                     (movingRoot != null &&
                      collider.transform.IsChildOf(movingRoot)) ||
                     IsPortalWallAtRemoteOpening(
-                        collider, exit, remoteStart, remoteHalfExtents,
+                        hit, exit, remoteStart, remoteHalfExtents,
                         hullRotation, remoteEnd))
                     continue;
 
@@ -790,11 +885,191 @@ public class Portal : MonoBehaviour
                     hit.point - remoteShift);
                 nearest = hit;
                 nearestDistance = distance;
+                contactedTransitionRamp = rampContact &&
+                    rampFraction <= hit.distance / localDistance + 0.0001f;
                 found = true;
             }
         }
 
         return found;
+    }
+
+    private static bool TryGetTransitionRampContact(
+        Portal portal,
+        Vector3 remoteStart,
+        Vector3 remoteDelta,
+        Vector3 movingHalfExtents,
+        out float contactFraction)
+    {
+        contactFraction = 0f;
+        if (portal == null)
+            return false;
+
+        // CPortalSimulator builds pAABBAngleTransformCollideable from the
+        // lower portal-hole carve. Its six planes form a box: 1024 HU wide,
+        // from 0.65 HU below the opening to -1024 HU, and 1/32..64 HU behind
+        // the portal plane. The box is transformed through the linked portal
+        // before Source traces the remote player hull against it.
+        const float innerCarveHu = (0.1f + 1f / 16f) * 4f;
+        const float farExtentHu = 1024f;
+        const float backExtentHu = 64f;
+        const float nearPlaneHu = 1f / 32f;
+        float unitScale = 1f / HammerUnitsPerUnityUnit;
+        float bottom = -portal.GetPortalHalfSizeWorld().y -
+            innerCarveHu * unitScale;
+        float farBottom = -farExtentHu * unitScale;
+        float back = backExtentHu * unitScale;
+        float nearPlane = nearPlaneHu * unitScale;
+        if (bottom <= farBottom)
+            return false;
+
+        Transform portalTransform = portal.transform;
+        Vector3 rampCenter = portalTransform.position +
+            portalTransform.up * ((bottom + farBottom) * 0.5f) +
+            portalTransform.forward * ((back + nearPlane) * 0.5f);
+        Vector3 rampHalfExtents = new Vector3(
+            farExtentHu * unitScale,
+            (bottom - farBottom) * 0.5f,
+            (back - nearPlane) * 0.5f);
+        return SweptAabbIntersectsOrientedBox(
+            remoteStart,
+            remoteDelta,
+            movingHalfExtents,
+            rampCenter,
+            rampHalfExtents,
+            portalTransform.rotation,
+            out contactFraction);
+    }
+
+    private static bool SweptAabbIntersectsOrientedBox(
+        Vector3 start,
+        Vector3 delta,
+        Vector3 movingHalfExtents,
+        Vector3 boxCenter,
+        Vector3 boxHalfExtents,
+        Quaternion boxRotation,
+        out float contactFraction)
+    {
+        contactFraction = 0f;
+        float entry = 0f;
+        float exit = 1f;
+        Vector3 boxRight = boxRotation * Vector3.right;
+        Vector3 boxUp = boxRotation * Vector3.up;
+        Vector3 boxForward = boxRotation * Vector3.forward;
+
+        if (!IntersectSweptBoxesOnAxis(
+                Vector3.right, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.up, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.forward, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                boxRight, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                boxUp, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                boxForward, start, delta, movingHalfExtents,
+                boxCenter, boxHalfExtents, boxRight, boxUp, boxForward,
+                ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.right, boxRight), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.right, boxUp), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.right, boxForward), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.up, boxRight), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.up, boxUp), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.up, boxForward), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.forward, boxRight), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.forward, boxUp), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit) ||
+            !IntersectSweptBoxesOnAxis(
+                Vector3.Cross(Vector3.forward, boxForward), start, delta,
+                movingHalfExtents, boxCenter, boxHalfExtents,
+                boxRight, boxUp, boxForward, ref entry, ref exit))
+            return false;
+
+        if (exit < 0f || entry > 1f)
+            return false;
+        contactFraction = Mathf.Clamp01(entry);
+        return true;
+    }
+
+    private static bool IntersectSweptBoxesOnAxis(
+        Vector3 axis,
+        Vector3 start,
+        Vector3 delta,
+        Vector3 movingHalfExtents,
+        Vector3 boxCenter,
+        Vector3 boxHalfExtents,
+        Vector3 boxRight,
+        Vector3 boxUp,
+        Vector3 boxForward,
+        ref float entry,
+        ref float exit)
+    {
+        float axisLengthSquared = axis.sqrMagnitude;
+        if (axisLengthSquared < 0.000001f)
+            return true;
+        axis /= Mathf.Sqrt(axisLengthSquared);
+
+        float movingRadius =
+            Mathf.Abs(axis.x) * movingHalfExtents.x +
+            Mathf.Abs(axis.y) * movingHalfExtents.y +
+            Mathf.Abs(axis.z) * movingHalfExtents.z;
+        float boxRadius =
+            Mathf.Abs(Vector3.Dot(axis, boxRight)) * boxHalfExtents.x +
+            Mathf.Abs(Vector3.Dot(axis, boxUp)) * boxHalfExtents.y +
+            Mathf.Abs(Vector3.Dot(axis, boxForward)) * boxHalfExtents.z;
+        float radius = movingRadius + boxRadius;
+        float origin = Vector3.Dot(start - boxCenter, axis);
+        float travel = Vector3.Dot(delta, axis);
+
+        if (Mathf.Abs(travel) < 0.000001f)
+            return origin >= -radius && origin <= radius;
+
+        float first = (-radius - origin) / travel;
+        float second = (radius - origin) / travel;
+        if (first > second)
+        {
+            float swap = first;
+            first = second;
+            second = swap;
+        }
+
+        entry = Mathf.Max(entry, first);
+        exit = Mathf.Min(exit, second);
+        return entry <= exit;
     }
 
     private static bool HasActivePair(Portal portal)
@@ -885,25 +1160,53 @@ public class Portal : MonoBehaviour
     }
 
     private static bool IsPortalWallAtRemoteOpening(
-        Collider candidate,
+        RaycastHit hit,
         Portal exit,
         Vector3 remoteStart,
         Vector3 hullHalfExtents,
         Quaternion hullRotation,
         Vector3 remoteEnd)
     {
-        if (exit == null || exit.wallCollider == null ||
+        Collider candidate = hit.collider;
+        if (candidate == null || exit == null || exit.wallCollider == null ||
             (candidate != exit.wallCollider &&
              !candidate.transform.IsChildOf(exit.wallCollider.transform)))
             return false;
 
         return FitsPortalWallPassage(
-            exit,
-            remoteStart,
-            hullHalfExtents,
-            hullRotation,
-            remoteEnd - remoteStart,
-            false);
+                exit,
+                remoteStart,
+                hullHalfExtents,
+                hullRotation,
+                remoteEnd - remoteStart,
+                false) &&
+            IsPortalOpeningContact(
+                exit, hit.point, hullHalfExtents, hullRotation);
+    }
+
+    private static bool IsPortalOpeningContact(
+        Portal portal,
+        Vector3 contactPoint,
+        Vector3 hullHalfExtents,
+        Quaternion hullRotation)
+    {
+        Vector3 normal = GetPortalPlaneNormal(portal);
+        Vector3 offset = contactPoint - portal.transform.position;
+        float normalExtent = ProjectHalfExtent(
+            normal,
+            hullRotation * Vector3.right,
+            hullRotation * Vector3.up,
+            hullRotation * Vector3.forward,
+            hullHalfExtents);
+        if (Mathf.Abs(Vector3.Dot(offset, normal)) >
+            PlayerCutoutDepth + normalExtent + PlayerCutoutTolerance)
+            return false;
+
+        Vector3 halfSize = portal.GetPortalHalfSizeWorld();
+        return Mathf.Abs(Vector3.Dot(offset, portal.transform.right)) <=
+                halfSize.x + PlayerCutoutTolerance &&
+            Mathf.Abs(Vector3.Dot(offset, portal.transform.up)) <=
+                halfSize.y + PlayerCutoutTolerance;
     }
 
     private static bool FitsPortalWallPassage(
