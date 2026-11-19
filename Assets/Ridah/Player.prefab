@@ -13122,46 +13122,13 @@ PrefabInstance:
       addedObject: {fileID: 7472000071139138621}
     - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 7939626713026128516}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 2289357167665125639}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 8203088946978403995}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 5590325314932838229}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
       addedObject: {fileID: 550106649824461076}
     - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 3475617716112225808}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 8801095868059893502}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 4608334533897796303}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 6292374319697427648}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 7534248758954637903}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 3602791026145884506}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 128002644678060687}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 7679002930350309723}
-    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
-      insertIndex: -1
       addedObject: {fileID: 6037646388066898754}
+    - targetCorrespondingSourceObject: {fileID: 7106022715029490145, guid: 58872c64ef064154fb518f92e8469001, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 565593987092411349}
     - targetCorrespondingSourceObject: {fileID: 2859197729763764857, guid: 58872c64ef064154fb518f92e8469001, type: 3}
       insertIndex: -1
       addedObject: {fileID: 4561709960225753502}
@@ -13429,63 +13396,6 @@ MonoBehaviour:
     course: 0
     checkpoint: 0
   checkpoints: []
---- !u!114 &7939626713026128516
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: c3bcf11eb5267f94c9c427b429aa46fa, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzJumpStats
-  player: {fileID: 0}
-  enabledInGame: 1
---- !u!114 &2289357167665125639
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6d24e9b6f4a48464eacac88debc88ec8, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzMeasureTool
-  hasFirstPoint: 0
-  firstPoint: {x: 0, y: 0, z: 0}
-  secondPoint: {x: 0, y: 0, z: 0}
---- !u!114 &8203088946978403995
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 907bf7aae7551b048af92bbcfd7db24b, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzLocalRecords
-  maximumRecords: 100
-  records: []
---- !u!114 &5590325314932838229
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: da53aeb10ca43f64499512bf574db799, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzReplayRecorder
-  player: {fileID: 0}
-  recordOnStart: 0
 --- !u!114 &550106649824461076
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -13522,7 +13432,7 @@ MonoBehaviour:
   jumpstatsFailstatsChat: 0
   jumpstatsFailstatsConsole: 0
   jumpstatsMinimumBroadcastTier: 5
-  paintColor: {r: 1, g: 1, b: 1, a: 1}
+  paintColor: {r: 1, g: 0, b: 0, a: 1}
   paintSize: 4
   showPlayers: 1
   quietSoundscapes: 0
@@ -13533,124 +13443,6 @@ MonoBehaviour:
   timerVolume: 1
   errorVolume: 1
   jumpstatsVolume: 1
---- !u!114 &3475617716112225808
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d095fb22b34f6504eb2b47908d7eb769, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzChat
-  prefix: '[GOKZ] '
---- !u!114 &8801095868059893502
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7f68e6ff4bab4574b96250401c8784a7, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzTips
-  tips:
-  - Mouse-wheel up can be bound to jump for bhop timing.
-  - KZTimer prestrafe rewards valid A/D turns up to 276 HU/s.
-  - SaveLoc stores position, view angles and velocity.
-  interval: 45
---- !u!114 &4608334533897796303
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: fd797f3ac4202954b87ce6d188aec8e3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzQuiet
-  applyEveryFrame: 0
---- !u!114 &6292374319697427648
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3ca19aa6b8fcb4e4d885c5cfec8ea72e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzTpAngleFix
-  player: {fileID: 0}
-  enabledInProfile: 1
---- !u!114 &7534248758954637903
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: ab14e7278847c834b99685cc1abf9c86, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzRaceSession
-  participants: []
-  raceActive: 0
-  raceTime: 0
-  autoFinishLocalRuntime: 1
---- !u!114 &3602791026145884506
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e79d13de5cd80ce44b1934a7124b9691, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzCommandRouter
-  runtime: {fileID: 0}
-  measure: {fileID: 0}
-  replay: {fileID: 0}
---- !u!114 &128002644678060687
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6095402800fe8cc47a0958876ffe1295, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzSlayOnEnd
-  player: {fileID: 0}
-  slayOnEnd: 0
---- !u!114 &7679002930350309723
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6749650969301662159}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3756601919493c042be9cfe9f799da22, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzMovementDiagnostics
-  player: {fileID: 0}
-  enabledInGame: 0
-  invalidateRunOnViolation: 0
-  toleranceHu: 8
 --- !u!65 &6037646388066898754
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -13672,6 +13464,50 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 0.6096, y: 1.3716, z: 0.6096}
   m_Center: {x: 0, y: 0.6858, z: 0}
+--- !u!114 &565593987092411349
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6749650969301662159}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d416ee9a015a48a58a5dfb2f68f76ece, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RidahFPS.Controllers.GokzPlayerFeatures
+  player: {fileID: 6749650969301662158}
+  runtime: {fileID: 7472000071139138621}
+  jumpStatsEnabled: 1
+  paintEnabled: 1
+  paintInterval: 0.1
+  maximumPaintMarks: 512
+  paintCamera: {fileID: 0}
+  hasFirstPoint: 0
+  firstPoint: {x: 0, y: 0, z: 0}
+  secondPoint: {x: 0, y: 0, z: 0}
+  maximumRecords: 100
+  records: []
+  recordOnStart: 0
+  currentClip:
+    tickRate: 128
+    frames: []
+  chatPrefix: '[GOKZ] '
+  tips:
+  - Mouse-wheel up can be bound to jump for bhop timing.
+  - KZTimer prestrafe rewards valid A/D turns up to 276 HU/s.
+  - SaveLoc stores position, view angles and velocity.
+  tipInterval: 45
+  quietApplyEveryFrame: 0
+  teleportAngleFixEnabled: 1
+  raceParticipants: []
+  raceActive: 0
+  raceTime: 0
+  autoFinishLocalRuntime: 1
+  slayOnEnd: 0
+  diagnosticsEnabled: 0
+  invalidateRunOnViolation: 0
+  diagnosticToleranceHu: 8
 --- !u!143 &7900782294686137229 stripped
 CharacterController:
   m_CorrespondingSourceObject: {fileID: 5950115381558266787, guid: 58872c64ef064154fb518f92e8469001, type: 3}
@@ -14213,6 +14049,7 @@ MonoBehaviour:
   speedText: {fileID: 0}
   infoPanelText: {fileID: 0}
   timerText: {fileID: 0}
+  jumpStatsText: {fileID: 0}
 --- !u!224 &5439222747753893045 stripped
 RectTransform:
   m_CorrespondingSourceObject: {fileID: 1832503242253530172, guid: b6573f0812bfd9641b99d3738d1d53c7, type: 3}

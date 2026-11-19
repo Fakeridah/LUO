@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -33,11 +34,17 @@ namespace RidahFPS.Controllers
         [SerializeField] private Text speedText;
         [SerializeField] private Text infoPanelText;
         [SerializeField] private Text timerText;
+        [SerializeField] private Text jumpStatsText;
 
         private GameplayIngredients.TimeKeeper _timeKeeper;
         private GokzRuntime _gokzRuntime;
         private GokzProfile _profile;
+        private GokzPlayerFeatures _features;
         private float _nextLookupTime;
+        private float _jumpStatsVisibleUntil;
+        private string _jumpStatsLine;
+        private float _commandFeedbackUntil;
+        private string _commandFeedback;
         private int _lastJumpCount = -1;
         private bool _showDuckString;
         private bool _lastJumpWasPerfect;
@@ -61,12 +68,16 @@ namespace RidahFPS.Controllers
 
         private void OnDestroy()
         {
+            UnbindFeatureEvents();
             if (Active == this)
                 Active = null;
         }
 
+        private void OnDisable() => UnbindFeatureEvents();
+
         private void Update()
         {
+            BindFeatureEvents();
             EnsurePlayer();
             if (player == null)
                 return;
@@ -88,6 +99,9 @@ namespace RidahFPS.Controllers
                 _lastJumpWasPerfect = player.GokzLastJumpWasPerfect;
                 _showDuckString = player.GokzJumpCount > 0 && player.GokzLastJumpWasDuck;
             }
+
+            if (jumpStatsText != null && Time.unscaledTime >= _jumpStatsVisibleUntil)
+                jumpStatsText.gameObject.SetActive(false);
 
             UpdateHudText();
         }
@@ -115,10 +129,13 @@ namespace RidahFPS.Controllers
                 infoPanelText = CreateText("GOKZInfoPanel", 26, TextAnchor.MiddleCenter);
             if (timerText == null)
                 timerText = CreateText("GOKZTimerText", 32, TextAnchor.MiddleCenter);
+            if (jumpStatsText == null)
+                jumpStatsText = CreateText("GOKZJumpStatsText", 18, TextAnchor.MiddleCenter);
 
             ConfigureText(infoPanelText, 26, TextAnchor.MiddleCenter);
             ConfigureText(timerText, 32, TextAnchor.MiddleCenter);
             ConfigureText(speedText, 45, TextAnchor.MiddleCenter);
+            ConfigureText(jumpStatsText, 18, TextAnchor.MiddleCenter);
 
             SetLayout(infoPanelText, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 new Vector2(0f, -95f), new Vector2(800f, 220f));
@@ -126,6 +143,9 @@ namespace RidahFPS.Controllers
                 new Vector2(0f, -60f), new Vector2(800f, 80f));
             SetLayout(speedText, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(0f, 125f), new Vector2(650f, 140f));
+            SetLayout(jumpStatsText, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, -250f), new Vector2(1200f, 180f));
+            jumpStatsText.gameObject.SetActive(false);
         }
 
         private Text CreateText(string objectName, int fontSize, TextAnchor alignment)
@@ -197,6 +217,8 @@ namespace RidahFPS.Controllers
                         info += "\n(" + takeoffString + ")" + (_showDuckString ? " <color=#71EEB8>C</color>" : string.Empty);
                     if (showKeysNow)
                         info += "\n" + FormatKeys();
+                    if (!string.IsNullOrEmpty(_commandFeedback) && Time.unscaledTime < _commandFeedbackUntil)
+                        info += "\n" + _commandFeedback;
                     infoPanelText.text = info;
                 }
             }
@@ -223,6 +245,102 @@ namespace RidahFPS.Controllers
                 if (timerRunning)
                     timerText.text = FormatTimerValue();
             }
+        }
+
+        private void BindFeatureEvents()
+        {
+            GokzPlayerFeatures features = GokzPlayerFeatures.Instance;
+            if (features == null && player != null)
+                features = player.GetComponent<GokzPlayerFeatures>();
+            if (_features == features)
+                return;
+
+            UnbindFeatureEvents();
+            _features = features;
+            if (_features != null)
+            {
+                _features.JumpCompleted += OnJumpCompleted;
+                _features.CommandCompleted += OnCommandCompleted;
+            }
+        }
+
+        private void UnbindFeatureEvents()
+        {
+            if (_features != null)
+            {
+                _features.JumpCompleted -= OnJumpCompleted;
+                _features.CommandCompleted -= OnCommandCompleted;
+            }
+            _features = null;
+        }
+
+        private void OnCommandCompleted(string message)
+        {
+            _commandFeedback = message;
+            _commandFeedbackUntil = Time.unscaledTime + 4f;
+        }
+
+        private void OnJumpCompleted(GokzJumpResult result)
+        {
+            if (GokzProfile.Instance != null && !GokzProfile.Instance.JumpstatsEnabled)
+                return;
+
+            StringBuilder report = new StringBuilder(256);
+            report.AppendFormat(
+                CultureInfo.InvariantCulture,
+                "{0} | {1:0.0} HU | {2} | {3} strafes | Sync {4:0}% | Pre {5:0} / Max {6:0} HU/s | {7:0.00}s",
+                result.type,
+                result.distance,
+                result.tier,
+                result.strafes,
+                result.sync,
+                result.takeoffSpeed,
+                result.maxSpeed,
+                result.airtime);
+
+            GokzStrafeResult[] strafes = result.strafeStats;
+            if (strafes != null)
+            {
+                for (int i = 0; i < strafes.Length; i += 3)
+                {
+                    report.AppendLine();
+                    AppendStrafe(report, i, strafes[i]);
+                    if (i + 1 < strafes.Length)
+                    {
+                        report.Append("   |   ");
+                        AppendStrafe(report, i + 1, strafes[i + 1]);
+                    }
+                    if (i + 2 < strafes.Length)
+                    {
+                        report.Append("   |   ");
+                        AppendStrafe(report, i + 2, strafes[i + 2]);
+                    }
+                }
+            }
+
+            _jumpStatsLine = report.ToString();
+            _jumpStatsVisibleUntil = Time.unscaledTime + 6f;
+            if (jumpStatsText != null)
+            {
+                jumpStatsText.text = _jumpStatsLine;
+                int lineCount = 1 + (strafes == null ? 0 : (strafes.Length + 2) / 3);
+                RectTransform rect = jumpStatsText.rectTransform;
+                rect.sizeDelta = new Vector2(1200f, Mathf.Clamp(32f + lineCount * 25f, 65f,
+                    Mathf.Max(350f, Screen.height - 80f)));
+                jumpStatsText.gameObject.SetActive(true);
+            }
+        }
+
+        private static void AppendStrafe(StringBuilder report, int index, GokzStrafeResult strafe)
+        {
+            report.AppendFormat(
+                CultureInfo.InvariantCulture,
+                "{0}{1} +{2:0.00}/-{3:0.00} HU/s {4:0}%",
+                index + 1,
+                strafe.direction < 0 ? "L" : "R",
+                strafe.gain,
+                strafe.loss,
+                strafe.sync);
         }
 
         private float GetHorizontalSpeedHu()

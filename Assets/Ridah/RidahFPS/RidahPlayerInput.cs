@@ -211,6 +211,16 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
                     ""interactions"": """",
                     ""initialStateCheck"": true,
                     ""priority"": 0
+                },
+                {
+                    ""name"": ""PaintHold"",
+                    ""type"": ""Button"",
+                    ""id"": ""bc933c3f-812f-4d7b-9972-c816da796532"",
+                    ""expectedControlType"": """",
+                    ""processors"": """",
+                    ""interactions"": """",
+                    ""initialStateCheck"": false,
+                    ""priority"": 0
                 }
             ],
             ""bindings"": [
@@ -345,6 +355,17 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
                     ""action"": ""SpeedUp"",
                     ""isComposite"": false,
                     ""isPartOfComposite"": false
+                },
+                {
+                    ""name"": """",
+                    ""id"": ""c509bbf5-f835-47f0-9517-f4dc63850671"",
+                    ""path"": ""<Keyboard>/p"",
+                    ""interactions"": """",
+                    ""processors"": """",
+                    ""groups"": ""Keyboard"",
+                    ""action"": ""PaintHold"",
+                    ""isComposite"": false,
+                    ""isPartOfComposite"": false
                 }
             ]
         }
@@ -377,6 +398,7 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         m_FirstRoom_NoClip = m_FirstRoom.FindAction("NoClip", throwIfNotFound: true);
         m_FirstRoom_Reset = m_FirstRoom.FindAction("Reset", throwIfNotFound: true);
         m_FirstRoom_SpeedUp = m_FirstRoom.FindAction("SpeedUp", throwIfNotFound: true);
+        m_FirstRoom_PaintHold = m_FirstRoom.FindAction("PaintHold", throwIfNotFound: true);
     }
 
     ~@RidahPlayerInput()
@@ -469,6 +491,7 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
     private readonly InputAction m_FirstRoom_NoClip;
     private readonly InputAction m_FirstRoom_Reset;
     private readonly InputAction m_FirstRoom_SpeedUp;
+    private readonly InputAction m_FirstRoom_PaintHold;
     /// <summary>
     /// Provides access to input actions defined in input action map "FirstRoom".
     /// </summary>
@@ -528,6 +551,10 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         /// Provides access to the underlying input action "FirstRoom/SpeedUp".
         /// </summary>
         public InputAction @SpeedUp => m_Wrapper.m_FirstRoom_SpeedUp;
+        /// <summary>
+        /// Provides access to the underlying input action "FirstRoom/PaintHold".
+        /// </summary>
+        public InputAction @PaintHold => m_Wrapper.m_FirstRoom_PaintHold;
         /// <summary>
         /// Provides access to the underlying input action map instance.
         /// </summary>
@@ -590,6 +617,9 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
             @SpeedUp.started += instance.OnSpeedUp;
             @SpeedUp.performed += instance.OnSpeedUp;
             @SpeedUp.canceled += instance.OnSpeedUp;
+            @PaintHold.started += instance.OnPaintHold;
+            @PaintHold.performed += instance.OnPaintHold;
+            @PaintHold.canceled += instance.OnPaintHold;
         }
 
         /// <summary>
@@ -637,6 +667,9 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
             @SpeedUp.started -= instance.OnSpeedUp;
             @SpeedUp.performed -= instance.OnSpeedUp;
             @SpeedUp.canceled -= instance.OnSpeedUp;
+            @PaintHold.started -= instance.OnPaintHold;
+            @PaintHold.performed -= instance.OnPaintHold;
+            @PaintHold.canceled -= instance.OnPaintHold;
         }
 
         /// <summary>
@@ -774,5 +807,12 @@ public partial class @RidahPlayerInput: IInputActionCollection2, IDisposable
         /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
         /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
         void OnSpeedUp(InputAction.CallbackContext context);
+        /// <summary>
+        /// Method invoked when associated input action "PaintHold" is either <see cref="UnityEngine.InputSystem.InputAction.started" />, <see cref="UnityEngine.InputSystem.InputAction.performed" /> or <see cref="UnityEngine.InputSystem.InputAction.canceled" />.
+        /// </summary>
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.started" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.performed" />
+        /// <seealso cref="UnityEngine.InputSystem.InputAction.canceled" />
+        void OnPaintHold(InputAction.CallbackContext context);
     }
 }

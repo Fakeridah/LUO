@@ -28,15 +28,31 @@ namespace RidahFPS.Controllers
     }
 
     [Serializable]
+    public struct GokzStrafeResult
+    {
+        // -1 = left turn, 1 = right turn, matching GOKZ's strafe direction.
+        public int direction;
+        public int ticks;
+        public int gainTicks;
+        public float gain;
+        public float loss;
+        public float sync;
+    }
+
+    [Serializable]
     public struct GokzJumpResult
     {
         public int number;
         public GokzJumpType type;
         public GokzJumpTier tier;
         public float takeoffSpeed;
+        public float maxSpeed;
         public float landingSpeed;
         public float airtime;
         public float distance;
+        public int strafes;
+        public float sync;
+        public GokzStrafeResult[] strafeStats;
         public bool perfect;
         public bool ducked;
         public bool deadstrafed;

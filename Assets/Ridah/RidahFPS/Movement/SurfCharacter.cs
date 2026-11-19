@@ -43,6 +43,7 @@ namespace RidahFPS.Controllers
         private readonly MoveData _moveData = new MoveData();
         internal CharacterController cc;
         private readonly GokzMovementDriver _movement = new GokzMovementDriver();
+        private GokzPlayerFeatures gokzFeatures;
         private Vector3 _baseVelocity;
         private Vector3 prevPosition;
         internal Vector3 _startPosition;
@@ -109,6 +110,7 @@ namespace RidahFPS.Controllers
             }
 
             TransformInit();
+            gokzFeatures = GetComponent<GokzPlayerFeatures>();
             _movement.EnableSourceCollision(this);
             Time.fixedDeltaTime = SourceMovementCore.TickInterval;
         }
@@ -196,6 +198,10 @@ namespace RidahFPS.Controllers
         {
             ApplyGokzInputForTick();
 
+            Vector3 positionBeforeMovement = transform.position;
+            Vector3 velocityBeforeMovement = _moveData.Velocity;
+            float viewYawDeltaForStats = _moveData.ViewYawDelta;
+
             Vector3 externalMovement = transform.position - prevPosition;
             _moveData.gameCodeMovedPlayer = externalMovement.sqrMagnitude > 0.00000001f;
             _moveData.Origin += externalMovement;
@@ -211,6 +217,9 @@ namespace RidahFPS.Controllers
             if (MoveEnabled)
                 _movement.Move(this);
             _movement.Finish(this);
+
+            if (gokzFeatures != null)
+                gokzFeatures.RecordMovementTick(positionBeforeMovement, velocityBeforeMovement, viewYawDeltaForStats);
 
             _moveData.wishJump = false;
             UpdateGoKzViewHeight();

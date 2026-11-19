@@ -46,7 +46,7 @@ namespace RidahFPS.Controllers
         [SerializeField] private int jumpstatsMinimumBroadcastTier = (int)GokzJumpTier.Ownage;
 
         [Header("Paint / Quiet")]
-        [SerializeField] private Color paintColor = Color.white;
+        [SerializeField] private Color paintColor = Color.red;
         [SerializeField, Range(1f, 32f)] private float paintSize = 4f;
         [SerializeField] private bool showPlayers = true;
         [SerializeField] private bool quietSoundscapes;

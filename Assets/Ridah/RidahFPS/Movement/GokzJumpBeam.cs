@@ -10,7 +10,7 @@ namespace RidahFPS.Controllers
     [RequireComponent(typeof(LineRenderer))]
     public sealed class GokzJumpBeam : MonoBehaviour
     {
-        [SerializeField] private GokzJumpStats jumpStats;
+        [SerializeField] private GokzPlayerFeatures features;
         [SerializeField] private LineRenderer line;
         [SerializeField] private float width = 0.015f;
         [SerializeField] private Color color = new Color(0.25f, 1f, 0.25f, 0.9f);
@@ -22,8 +22,8 @@ namespace RidahFPS.Controllers
         {
             if (line == null)
                 line = GetComponent<LineRenderer>();
-            if (jumpStats == null)
-                jumpStats = GetComponent<GokzJumpStats>();
+            if (features == null)
+                features = GetComponentInParent<GokzPlayerFeatures>();
             _player = GetComponent<LZM>();
             line.positionCount = 0;
             line.startWidth = width;
@@ -34,19 +34,19 @@ namespace RidahFPS.Controllers
 
         private void OnEnable()
         {
-            if (jumpStats != null)
+            if (features != null)
             {
-                jumpStats.JumpStarted += OnJumpStarted;
-                jumpStats.JumpCompleted += OnJumpCompleted;
+                features.JumpStarted += OnJumpStarted;
+                features.JumpCompleted += OnJumpCompleted;
             }
         }
 
         private void OnDisable()
         {
-            if (jumpStats != null)
+            if (features != null)
             {
-                jumpStats.JumpStarted -= OnJumpStarted;
-                jumpStats.JumpCompleted -= OnJumpCompleted;
+                features.JumpStarted -= OnJumpStarted;
+                features.JumpCompleted -= OnJumpCompleted;
             }
         }
 
