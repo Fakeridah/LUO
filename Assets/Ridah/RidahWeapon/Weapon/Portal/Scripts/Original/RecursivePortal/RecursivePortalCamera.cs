@@ -399,7 +399,10 @@ public class RecursivePortalCamera : MonoBehaviour
 
         // Source clips against the exit portal's forward plane, offset two
         // Hammer units behind it to avoid z-fighting with crossing geometry.
-        Vector3 clipNormal = exitPortal.transform.forward;
+        // PortalPlacement stores local +Z into the host surface. Source's
+        // m_vForward is the visible/front normal, so use the matching outward
+        // normal here rather than Unity's local +Z direction.
+        Vector3 clipNormal = Portal.GetPortalPlaneNormal(exitPortal);
         float clipOffset = SourceClipOffsetHammerUnits /
             HammerUnitsPerUnityUnit;
         float planeW = Vector3.Dot(
@@ -444,8 +447,11 @@ public class RecursivePortalCamera : MonoBehaviour
                 .sqrMagnitude < halfHeight * halfHeight)
             return true;
 
+        // Match Source's front-side test. The portal root's +Z points into its
+        // host wall; its visible side is the opposite normal.
+        Vector3 frontNormal = Portal.GetPortalPlaneNormal(portal);
         if (Vector3.Dot(
-                portal.transform.forward,
+                frontNormal,
                 viewCamera.transform.position - portal.transform.position) <= 0f)
             return false;
 
