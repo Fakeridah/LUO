@@ -29,6 +29,9 @@ namespace RidahFPS.Controllers {
 		//The real rotation of the camera without recoil
 		public Vector3 realRotation;
 
+		private Vector3 portalEyeOffsetWorld;
+		private Vector3 appliedPortalEyeOffsetLocal;
+
 		[Header("Aimpunch")]
 		[Tooltip("bigger number makes the response more damped, smaller is less damped, currently the system will overshoot, with larger damping values it won't")]
 		public float punchDamping = 9.0f;
@@ -86,6 +89,31 @@ namespace RidahFPS.Controllers {
 			realRotation.y += punchAngle.y;
 
 			transform.eulerAngles = realRotation;
+			ApplyPortalEyeOffset();
+		}
+
+		public void SetPortalEyeOffset(Vector3 transformedOldEyePosition,
+			Vector3 newEyePosition)
+		{
+			portalEyeOffsetWorld = transformedOldEyePosition - newEyePosition;
+		}
+
+		private void ApplyPortalEyeOffset()
+		{
+			Transform parent = transform.parent;
+			Vector3 previousOffsetWorld = parent != null
+				? parent.TransformVector(appliedPortalEyeOffsetLocal)
+				: appliedPortalEyeOffsetLocal;
+			Vector3 unoffsetPosition = transform.position - previousOffsetWorld;
+
+			// CPortal_Player::DecayEyeOffset uses a 0.2 second exponential
+			// decay so the eye does not visibly snap when the player origin is
+			// transformed through a portal.
+			portalEyeOffsetWorld *= Mathf.Exp(-Time.deltaTime / 0.2f);
+			transform.position = unoffsetPosition + portalEyeOffsetWorld;
+			appliedPortalEyeOffsetLocal = parent != null
+				? parent.InverseTransformVector(portalEyeOffsetWorld)
+				: portalEyeOffsetWorld;
 		}
 
 		public void ViewPunch(Vector2 punchAmount)

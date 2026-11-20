@@ -1446,7 +1446,9 @@ namespace RidahFPS.Controllers
                 GetGravityAcceleration(),
                 TickInterval,
                 out Quaternion portalRotation,
-                out bool forcePortalDuck))
+                out bool forcePortalDuck,
+                out Portal exitPortal,
+                out Vector3 transformedOldEyePosition))
             {
                 if (forcePortalDuck)
                     ForcePortalCrouch();
@@ -1479,6 +1481,23 @@ namespace RidahFPS.Controllers
                 _sampledGroundPosition = Vector3.zero;
                 _sampledGroundVelocity = Vector3.zero;
                 Physics.SyncTransforms();
+
+                // Source checks the new portal collision environment in the
+                // same command and moves a start-solid player to the nearest
+                // passable point. This is especially important for a CS:GO
+                // axis-aligned hull exiting near a portal edge.
+                if (TryRecoverPortalExit(
+                    exitPortal,
+                    ref portalPosition,
+                    GetBoxHalfExtents(_isCrouched)))
+                {
+                    _surfer.MoveData.playerTransform.position = portalPosition;
+                    _surfer.MoveData.Origin = portalPosition;
+                    Physics.SyncTransforms();
+                }
+
+                portablePlayer.ApplyPortalEyeOffset(
+                    transformedOldEyePosition);
             }
 
             // Source calls CMoveHelperServer::ProcessImpacts after
@@ -3170,6 +3189,55 @@ namespace RidahFPS.Controllers
                     mask &= ~(1 << layer);
             }
             return mask;
+        }
+
+        private bool TryRecoverPortalExit(
+            Portal exitPortal,
+            ref Vector3 rootPosition,
+            Vector3 halfExtents)
+        {
+            if (exitPortal == null ||
+                !IsHullStuckAt(rootPosition, halfExtents))
+                return false;
+
+            Vector3 center = rootPosition + _movementUp * halfExtents.y;
+            Vector3 normal = Portal.GetPortalPlaneNormal(exitPortal).normalized;
+            Vector3 fromPortal = center - exitPortal.transform.position;
+            Vector3 lateralOffset = fromPortal -
+                Vector3.Dot(fromPortal, normal) * normal;
+
+            // CPortalGameMovement first traces from the portal centerline to
+            // the teleported point. That removes the lateral AABB corner
+            // which most often catches on the exit wall.
+            Vector3 centeredRoot = rootPosition - lateralOffset;
+            if (!IsHullStuckAt(centeredRoot, halfExtents))
+            {
+                rootPosition = centeredRoot;
+                return true;
+            }
+
+            // Source's fallback searches for a passable point while keeping
+            // the player center on the room side of the exit portal. Search
+            // outward in one-Hammer-unit steps, up to its 100-unit limit.
+            for (int distanceHu = 1; distanceHu <= 100; ++distanceHu)
+            {
+                Vector3 candidate = centeredRoot +
+                    normal * (distanceHu * UnitScale);
+                Vector3 candidateCenter = candidate +
+                    _movementUp * halfExtents.y;
+                if (Vector3.Dot(
+                        candidateCenter - exitPortal.transform.position,
+                        normal) < 0f)
+                    continue;
+
+                if (!IsHullStuckAt(candidate, halfExtents))
+                {
+                    rootPosition = candidate;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool TrySourceStuckRecovery()

@@ -9,6 +9,25 @@ public class PortablePlayer : MonoBehaviour
 
     public LZM Player => player != null ? player : (player = GetComponent<LZM>());
 
+    public Vector3 GetEyePosition()
+    {
+        if (playerAiming == null)
+            playerAiming = GetComponentInChildren<PlayerAiming>();
+        return playerAiming != null
+            ? playerAiming.transform.position
+            : transform.position;
+    }
+
+    public void ApplyPortalEyeOffset(Vector3 transformedOldEyePosition)
+    {
+        if (playerAiming == null)
+            playerAiming = GetComponentInChildren<PlayerAiming>();
+        if (playerAiming != null)
+            playerAiming.SetPortalEyeOffset(
+                transformedOldEyePosition,
+                playerAiming.transform.position);
+    }
+
     private void Awake()
     {
         player = GetComponent<LZM>();

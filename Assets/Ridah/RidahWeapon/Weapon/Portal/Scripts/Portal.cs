@@ -643,10 +643,14 @@ public class Portal : MonoBehaviour
         float gravityAcceleration,
         float frameTime,
         out Quaternion portalRotation,
-        out bool forceDuck)
+        out bool forceDuck,
+        out Portal exitPortal,
+        out Vector3 transformedOldEyePosition)
     {
         portalRotation = Quaternion.identity;
         forceDuck = false;
+        exitPortal = null;
+        transformedOldEyePosition = Vector3.zero;
         if (player == null || movementUp.sqrMagnitude < 0.5f)
             return false;
 
@@ -656,7 +660,6 @@ public class Portal : MonoBehaviour
         Vector3 currentCenter = currentRootPosition + centerOffset;
         float nearestCrossing = float.PositiveInfinity;
         Portal entryPortal = null;
-        Portal exitPortal = null;
         float crossingFraction = 0f;
 
         for (int i = 0; i < ActivePortals.Count; ++i)
@@ -731,6 +734,8 @@ public class Portal : MonoBehaviour
 
         Vector3 transformedCenter = MapPortalPoint(
             entryPortal, exitPortal, currentCenter);
+        transformedOldEyePosition = MapPortalPoint(
+            entryPortal, exitPortal, player.GetEyePosition());
         Vector3 exitCenterOffset = forceDuck
             ? movementUp * duckHullHalfExtents.y
             : centerOffset;
@@ -803,8 +808,9 @@ public class Portal : MonoBehaviour
             float planeFraction = Mathf.Clamp01(
                 startDistance / -deltaDistance);
             Vector3 centerAtPlane = center + sweepDelta * planeFraction;
-            if (!FitsPortalOpening(
-                entry, centerAtPlane, hullHalfExtents, hullRotation))
+            if (!IntersectsPortalOpening(
+                    entry, centerAtPlane, hullHalfExtents, hullRotation,
+                    PlayerCutoutTolerance))
                 continue;
 
             Portal exit = entry.otherPortal;
@@ -816,8 +822,9 @@ public class Portal : MonoBehaviour
                 : hullHalfExtents;
             Vector3 remoteCenterAtPlane = MapPortalPoint(
                 entry, exit, centerAtPlane);
-            if (!FitsPortalOpening(
-                exit, remoteCenterAtPlane, remoteHalfExtents, hullRotation))
+            if (!IntersectsPortalOpening(
+                    exit, remoteCenterAtPlane, remoteHalfExtents, hullRotation,
+                    PlayerCutoutTolerance))
                 continue;
 
             float remoteNormalExtent = ProjectHalfExtent(
@@ -1102,7 +1109,7 @@ public class Portal : MonoBehaviour
             Quaternion.Inverse(entry.transform.rotation);
     }
 
-    private static Vector3 GetPortalPlaneNormal(Portal portal)
+    public static Vector3 GetPortalPlaneNormal(Portal portal)
     {
         // PortalPlacement orients the portal's local +Z axis into the wall.
         // Source portal planes use the outward-facing normal.
@@ -1164,6 +1171,39 @@ public class Portal : MonoBehaviour
                 halfHeight <= halfSize.y + PlayerCutoutTolerance;
     }
 
+    private static bool IntersectsPortalOpening(
+        Portal portal,
+        Vector3 hullCenter,
+        Vector3 hullHalfExtents,
+        Quaternion hullRotation,
+        float margin)
+    {
+        if (portal == null || portal.portalCollider == null)
+            return false;
+
+        Vector3 halfSize = portal.GetPortalHalfSizeWorld();
+        Vector3 hullRight = hullRotation * Vector3.right;
+        Vector3 hullUp = hullRotation * Vector3.up;
+        Vector3 hullForward = hullRotation * Vector3.forward;
+        float halfWidth = ProjectHalfExtent(
+            portal.transform.right,
+            hullRight,
+            hullUp,
+            hullForward,
+            hullHalfExtents);
+        float halfHeight = ProjectHalfExtent(
+            portal.transform.up,
+            hullRight,
+            hullUp,
+            hullForward,
+            hullHalfExtents);
+        Vector3 offset = hullCenter - portal.transform.position;
+        return Mathf.Abs(Vector3.Dot(offset, portal.transform.right)) <=
+                halfSize.x + halfWidth + margin &&
+            Mathf.Abs(Vector3.Dot(offset, portal.transform.up)) <=
+                halfSize.y + halfHeight + margin;
+    }
+
     private static bool IsPortalWallAtRemoteOpening(
         RaycastHit hit,
         Portal exit,
@@ -1184,7 +1224,8 @@ public class Portal : MonoBehaviour
                 hullHalfExtents,
                 hullRotation,
                 remoteEnd - remoteStart,
-                false);
+                false,
+                true);
     }
 
     private static bool FitsPortalWallPassage(
@@ -1193,7 +1234,8 @@ public class Portal : MonoBehaviour
         Vector3 hullHalfExtents,
         Quaternion hullRotation,
         Vector3 hullSweepDelta,
-        bool allowApertureEdgeOverlap)
+        bool allowApertureEdgeOverlap,
+        bool requireWholeHull = false)
     {
         Vector3 planeNormal = GetPortalPlaneNormal(portal);
         float startDistance = Vector3.Dot(
@@ -1233,23 +1275,18 @@ public class Portal : MonoBehaviour
             PlayerCutoutDepth + hullNormalExtent + PlayerCutoutTolerance)
             return false;
 
-        if (!allowApertureEdgeOverlap)
+        if (requireWholeHull)
             return FitsPortalOpening(
                 portal, centerAtPlane, hullHalfExtents, hullRotation);
 
-        Vector3 halfSize = portal.GetPortalHalfSizeWorld();
-        Vector3 right = hullRotation * Vector3.right;
-        Vector3 up = hullRotation * Vector3.up;
-        Vector3 forward = hullRotation * Vector3.forward;
-        float halfWidth = ProjectHalfExtent(
-            portal.transform.right, right, up, forward, hullHalfExtents);
-        float halfHeight = ProjectHalfExtent(
-            portal.transform.up, right, up, forward, hullHalfExtents);
-        Vector3 offset = centerAtPlane - portal.transform.position;
-        return Mathf.Abs(Vector3.Dot(offset, portal.transform.right)) <=
-                halfSize.x + halfWidth + PlayerCutoutMargin &&
-            Mathf.Abs(Vector3.Dot(offset, portal.transform.up)) <=
-                halfSize.y + halfHeight + PlayerCutoutMargin;
+        return IntersectsPortalOpening(
+            portal,
+            centerAtPlane,
+            hullHalfExtents,
+            hullRotation,
+            allowApertureEdgeOverlap
+                ? PlayerCutoutMargin
+                : PlayerCutoutTolerance);
     }
 
     private static bool IsPortalOwnedCollider(Collider candidate)
