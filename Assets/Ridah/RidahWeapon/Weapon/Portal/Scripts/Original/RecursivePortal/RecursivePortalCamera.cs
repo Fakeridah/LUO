@@ -33,6 +33,9 @@ public class RecursivePortalCamera : MonoBehaviour
 
     private RenderTexture[,] portalTextures = new RenderTexture[PortalCount, 0];
     private MaterialPropertyBlock[] portalPropertyBlocks;
+    private readonly List<Vector3> portalViewPositions = new List<Vector3>();
+    private readonly List<Quaternion> portalViewRotations =
+        new List<Quaternion>();
     private Texture2D terminalStaticTexture;
     private int textureWidth;
     private int textureHeight;
@@ -321,60 +324,78 @@ public class RecursivePortalCamera : MonoBehaviour
                 entryPortal, sourceViewCamera, recursionLevel))
             return;
 
-        GetTransformedCameraPose(
-            entryPortal, exitPortal, sourcePosition, sourceRotation,
-            out Vector3 virtualPosition, out Quaternion virtualRotation);
-        ConfigurePortalCamera(exitPortal, virtualPosition, virtualRotation);
+        // Build the visible view chain first, then submit each camera request
+        // deepest-first. Recursively submitting this same Camera from inside
+        // its own URP render request corrupts culling state at deeper levels.
+        portalViewPositions.Clear();
+        portalViewRotations.Clear();
+        if (portalViewPositions.Capacity < allocatedDepth)
+            portalViewPositions.Capacity = allocatedDepth;
+        if (portalViewRotations.Capacity < allocatedDepth)
+            portalViewRotations.Capacity = allocatedDepth;
+        Vector3 currentPosition = sourcePosition;
+        Quaternion currentRotation = sourceRotation;
 
-        // Source's default stencil depth is two. In a portal view it skips the
-        // exit portal, clips candidates against that view's frustum, and only
-        // recurses through visible linked portals.
-        if (recursionLevel + 1 < allocatedDepth &&
-            ShouldUpdatePortalView(
-                entryPortal, portalCamera, recursionLevel + 1))
+        for (int depth = recursionLevel; depth < allocatedDepth; ++depth)
         {
-            RenderPortalView(
-                entryIndex,
-                recursionLevel + 1,
-                portalCamera,
-                virtualPosition,
-                virtualRotation);
-        }
+            GetTransformedCameraPose(
+                entryPortal, exitPortal, currentPosition, currentRotation,
+                out Vector3 virtualPosition, out Quaternion virtualRotation);
+            portalViewPositions.Add(virtualPosition);
+            portalViewRotations.Add(virtualRotation);
 
-        // Restore this view after its child, then draw it into its own target.
-        ConfigurePortalCamera(exitPortal, virtualPosition, virtualRotation);
-        portalCamera.targetTexture = portalTextures[entryIndex, recursionLevel];
+            ConfigurePortalCamera(exitPortal, virtualPosition, virtualRotation);
+            if (depth + 1 >= allocatedDepth ||
+                !ShouldUpdatePortalView(
+                    entryPortal, portalCamera, depth + 1))
+                break;
+
+            currentPosition = virtualPosition;
+            currentRotation = virtualRotation;
+        }
 
         Renderer entrySurface = entryPortal.Renderer;
         Renderer exitSurface = exitPortal.Renderer;
-        Texture previousEntryTexture = GetPortalTexture(entryIndex);
-        bool exitSurfaceWasEnabled =
-            exitSurface != null && exitSurface.enabled;
 
-        Texture childTexture = recursionLevel + 1 < allocatedDepth
-            ? (Texture)portalTextures[entryIndex, recursionLevel + 1]
-            : terminalStaticTexture;
-
-        BindPortalTexture(entryIndex, childTexture);
-        if (exitSurface != null)
-            exitSurface.enabled = false;
-
-        try
+        for (int viewIndex = portalViewPositions.Count - 1;
+             viewIndex >= 0; --viewIndex)
         {
-            UniversalRenderPipeline.SingleCameraRequest request =
-                new UniversalRenderPipeline.SingleCameraRequest
-                {
-                    destination = portalCamera.targetTexture
-                };
-            UnityEngine.Rendering.RenderPipeline.SubmitRenderRequest(
-                portalCamera, request);
-        }
-        finally
-        {
-            if (entrySurface != null)
-                BindPortalTexture(entryIndex, previousEntryTexture);
+            int absoluteDepth = recursionLevel + viewIndex;
+            ConfigurePortalCamera(
+                exitPortal,
+                portalViewPositions[viewIndex],
+                portalViewRotations[viewIndex]);
+            portalCamera.targetTexture =
+                portalTextures[entryIndex, absoluteDepth];
+
+            Texture previousEntryTexture = GetPortalTexture(entryIndex);
+            bool exitSurfaceWasEnabled =
+                exitSurface != null && exitSurface.enabled;
+            Texture childTexture = viewIndex + 1 < portalViewPositions.Count
+                ? (Texture)portalTextures[entryIndex, absoluteDepth + 1]
+                : terminalStaticTexture;
+
+            BindPortalTexture(entryIndex, childTexture);
             if (exitSurface != null)
-                exitSurface.enabled = exitSurfaceWasEnabled;
+                exitSurface.enabled = false;
+
+            try
+            {
+                UniversalRenderPipeline.SingleCameraRequest request =
+                    new UniversalRenderPipeline.SingleCameraRequest
+                    {
+                        destination = portalCamera.targetTexture
+                    };
+                UnityEngine.Rendering.RenderPipeline.SubmitRenderRequest(
+                    portalCamera, request);
+            }
+            finally
+            {
+                if (entrySurface != null)
+                    BindPortalTexture(entryIndex, previousEntryTexture);
+                if (exitSurface != null)
+                    exitSurface.enabled = exitSurfaceWasEnabled;
+            }
         }
     }
 
