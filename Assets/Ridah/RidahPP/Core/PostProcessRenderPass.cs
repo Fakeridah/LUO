@@ -14,12 +14,14 @@ namespace Ridah.URPPostProcessing
     public class PostProcessRenderPass : ScriptableRenderPass
     {
         private string displayName;
+        private PostProcessOrderConfig config;
         private int cycleRT_1 = Shader.PropertyToID("cycleRT_1");
         private int cycleRT_2 = Shader.PropertyToID("cycleRT_2");
         private List<Type> volumeTypeList;
         private List<PostProcessVolumeComponent> activeVolumeList;
         private GraphicsFormat defaultHDRFormat;
         private CameraData cameraData;
+        private bool volumeTypesResolved;
 
         private sealed class RenderGraphPassData
         {
@@ -34,6 +36,7 @@ namespace Ridah.URPPostProcessing
         public PostProcessRenderPass(RenderPassEvent passEvent, PostProcessOrderConfig config)
         {
             displayName = $"CustomPostProcessPass {passEvent}";//string.Format("CustomPostProcessPass {0} ",passEvent);
+            this.config = config;
             renderPassEvent = passEvent;
             requiresIntermediateTexture = true;
 
@@ -41,7 +44,8 @@ namespace Ridah.URPPostProcessing
             volumeTypeList = new List<Type>();
 
             var piplineAsset = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
-            if (SystemInfo.IsFormatSupported(GraphicsFormat.B10G11R11_UFloatPack32, FormatUsage.Linear | FormatUsage.Render)
+            if (piplineAsset != null &&
+                SystemInfo.IsFormatSupported(GraphicsFormat.B10G11R11_UFloatPack32, FormatUsage.Linear | FormatUsage.Render)
                 && piplineAsset.supportsHDR)
             {
                 defaultHDRFormat = GraphicsFormat.B10G11R11_UFloatPack32;
@@ -53,21 +57,40 @@ namespace Ridah.URPPostProcessing
                     : GraphicsFormat.R8G8B8A8_UNorm;//normalize rgba
             }
 
-            //collect all custom postprocess volume belong this InjectionPoint
-            var allVolumeTypes = VolumeManager.instance.baseComponentTypeArray;
-            foreach (var volumeName in config.GetVolumeList((InjectionPoint)renderPassEvent))
+            ResolveVolumeTypesIfReady();
+        }
+
+        private void ResolveVolumeTypesIfReady()
+        {
+            if (volumeTypesResolved || config == null)
+                return;
+
+            VolumeManager volumeManager = VolumeManager.instance;
+            if (volumeManager == null || !volumeManager.isInitialized)
+                return;
+
+            Type[] allVolumeTypes = volumeManager.baseComponentTypeArray;
+            List<string> configuredVolumeNames =
+                config.GetVolumeList((InjectionPoint)renderPassEvent);
+            if (configuredVolumeNames != null)
             {
-                var volumeType = allVolumeTypes.ToList().Find((t) => { return t.ToString() == volumeName; });
-
-                //check volume type is valid 
-                if (volumeType == null)
+                foreach (string volumeName in configuredVolumeNames)
                 {
-                    Debug.LogError($"Can't find Volume : [{volumeName}] , Remove it from config");
-                    continue;
-                }
+                    Type volumeType = Array.Find(
+                        allVolumeTypes, type => type.ToString() == volumeName);
 
-                volumeTypeList.Add(volumeType); //type return postprocess volume
+                    if (volumeType == null)
+                    {
+                        Debug.LogError(
+                            $"Can't find Volume : [{volumeName}] , Remove it from config");
+                        continue;
+                    }
+
+                    volumeTypeList.Add(volumeType);
+                }
             }
+
+            volumeTypesResolved = true;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -253,6 +276,7 @@ namespace Ridah.URPPostProcessing
         public void Setup(CameraData cameraData)
         {
             this.cameraData = cameraData;
+            ResolveVolumeTypesIfReady();
             ConfigureInput(ScriptableRenderPassInput.Normal); // all of this to just call this one line
             return;
         }
