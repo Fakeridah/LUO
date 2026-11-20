@@ -488,9 +488,7 @@ public class Portal : MonoBehaviour
                     apertureHalfExtents,
                     hullRotation,
                     hullSweepDelta,
-                    false) &&
-                IsPortalOpeningContact(
-                    portal, hit, apertureHalfExtents, hullRotation))
+                    false))
                 return true;
         }
 
@@ -621,9 +619,7 @@ public class Portal : MonoBehaviour
                     hullHalfExtents,
                     hullRotation,
                     hullSweepDelta,
-                    false) &&
-                IsPortalOpeningContact(
-                    portal, hit, hullHalfExtents, hullRotation))
+                    false))
                 return true;
         }
 
@@ -1188,54 +1184,7 @@ public class Portal : MonoBehaviour
                 hullHalfExtents,
                 hullRotation,
                 remoteEnd - remoteStart,
-                false) &&
-            IsPortalOpeningContact(
-                exit, hit, hullHalfExtents, hullRotation);
-    }
-
-    private static bool IsPortalOpeningContact(
-        Portal portal,
-        RaycastHit hit,
-        Vector3 hullHalfExtents,
-        Quaternion hullRotation)
-    {
-        Vector3 normal = GetPortalPlaneNormal(portal);
-        Vector3 hitNormal = hit.normal.normalized;
-        if (hitNormal.sqrMagnitude < 0.5f ||
-            Mathf.Abs(Vector3.Dot(hitNormal, normal)) < 0.95f)
-            return false;
-
-        Vector3 offset = hit.point - portal.transform.position;
-        Vector3 hullRight = hullRotation * Vector3.right;
-        Vector3 hullUp = hullRotation * Vector3.up;
-        Vector3 hullForward = hullRotation * Vector3.forward;
-        float normalExtent = ProjectHalfExtent(
-            normal,
-            hullRight,
-            hullUp,
-            hullForward,
-            hullHalfExtents);
-        if (Mathf.Abs(Vector3.Dot(offset, normal)) >
-            PlayerCutoutDepth + normalExtent + PlayerCutoutTolerance)
-            return false;
-
-        Vector3 halfSize = portal.GetPortalHalfSizeWorld();
-        float rightExtent = ProjectHalfExtent(
-            portal.transform.right,
-            hullRight,
-            hullUp,
-            hullForward,
-            hullHalfExtents);
-        float upExtent = ProjectHalfExtent(
-            portal.transform.up,
-            hullRight,
-            hullUp,
-            hullForward,
-            hullHalfExtents);
-        return Mathf.Abs(Vector3.Dot(offset, portal.transform.right)) <=
-                halfSize.x + rightExtent + PlayerCutoutTolerance &&
-            Mathf.Abs(Vector3.Dot(offset, portal.transform.up)) <=
-                halfSize.y + upExtent + PlayerCutoutTolerance;
+                false);
     }
 
     private static bool FitsPortalWallPassage(

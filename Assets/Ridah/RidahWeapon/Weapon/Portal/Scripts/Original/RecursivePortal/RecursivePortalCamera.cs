@@ -160,7 +160,6 @@ public class RecursivePortalCamera : MonoBehaviour
         Transform cameraTransform = portalCamera.transform;
         cameraTransform.position = mainCamera.transform.position;
         cameraTransform.rotation = mainCamera.transform.rotation;
-        portalCamera.ResetWorldToCameraMatrix();
 
         for (int i = 0; i <= iterationID; ++i)
         {
@@ -176,26 +175,28 @@ public class RecursivePortalCamera : MonoBehaviour
             cameraTransform.rotation = outTransform.rotation * relativeRotation;
         }
 
-        // Source keeps the virtual camera on the negative side of the exit
-        // clip plane. Unity placement stores +Z into the host wall, so orient
-        // the plane away from the virtual camera and towards the remote scene.
-        Vector3 clipNormal = outTransform.forward;
+        // The oblique near plane must face the virtual camera. Portal placement
+        // stores local +Z into the host wall; the virtual camera can be on
+        // either side after mapping, so choose the plane side from its position.
+        portalCamera.ResetWorldToCameraMatrix();
+        Vector3 clipNormal = -outTransform.forward;
         if (Vector3.Dot(
                 clipNormal,
-                cameraTransform.position - outTransform.position) > 0f)
+                cameraTransform.position - outTransform.position) < 0f)
             clipNormal = -clipNormal;
 
-        const float sourceClipOffset = 2f / 52.4934383202f;
+        const float clipPlaneOffset = 0.01f;
         Plane plane = new Plane(
             clipNormal,
-            outTransform.position - clipNormal * sourceClipOffset);
+            outTransform.position + clipNormal * clipPlaneOffset);
         Vector4 clipPlaneWorldSpace = new Vector4(
             plane.normal.x, plane.normal.y, plane.normal.z, plane.distance);
         Vector4 clipPlaneCameraSpace =
             Matrix4x4.Transpose(Matrix4x4.Inverse(
                 portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
 
-        portalCamera.projectionMatrix = mainCamera.CalculateObliqueMatrix(
+        portalCamera.projectionMatrix = mainCamera.projectionMatrix;
+        portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
             clipPlaneCameraSpace);
         UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
     }
