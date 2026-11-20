@@ -176,23 +176,26 @@ public class RecursivePortalCamera : MonoBehaviour
             cameraTransform.rotation = outTransform.rotation * relativeRotation;
         }
 
-        Vector3 clipNormal = -outTransform.forward;
+        // Source keeps the virtual camera on the negative side of the exit
+        // clip plane. Unity placement stores +Z into the host wall, so orient
+        // the plane away from the virtual camera and towards the remote scene.
+        Vector3 clipNormal = outTransform.forward;
         if (Vector3.Dot(
                 clipNormal,
-                cameraTransform.position - outTransform.position) < 0f)
+                cameraTransform.position - outTransform.position) > 0f)
             clipNormal = -clipNormal;
 
+        const float sourceClipOffset = 2f / 52.4934383202f;
         Plane plane = new Plane(
             clipNormal,
-            outTransform.position + clipNormal * 0.01f);
+            outTransform.position - clipNormal * sourceClipOffset);
         Vector4 clipPlaneWorldSpace = new Vector4(
             plane.normal.x, plane.normal.y, plane.normal.z, plane.distance);
         Vector4 clipPlaneCameraSpace =
             Matrix4x4.Transpose(Matrix4x4.Inverse(
                 portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
 
-        portalCamera.projectionMatrix = mainCamera.projectionMatrix;
-        portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
+        portalCamera.projectionMatrix = mainCamera.CalculateObliqueMatrix(
             clipPlaneCameraSpace);
         UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
     }

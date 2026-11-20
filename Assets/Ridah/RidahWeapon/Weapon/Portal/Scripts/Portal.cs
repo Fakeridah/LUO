@@ -490,7 +490,7 @@ public class Portal : MonoBehaviour
                     hullSweepDelta,
                     false) &&
                 IsPortalOpeningContact(
-                    portal, hit.point, apertureHalfExtents, hullRotation))
+                    portal, hit, apertureHalfExtents, hullRotation))
                 return true;
         }
 
@@ -598,8 +598,10 @@ public class Portal : MonoBehaviour
 
     public static bool IsPairedPortalWallContact(
         RaycastHit hit,
+        Vector3 hullCenter,
         Vector3 hullHalfExtents,
-        Quaternion hullRotation)
+        Quaternion hullRotation,
+        Vector3 hullSweepDelta)
     {
         Collider candidate = hit.collider;
         if (candidate == null)
@@ -613,8 +615,15 @@ public class Portal : MonoBehaviour
                  !candidate.transform.IsChildOf(portal.wallCollider.transform)))
                 continue;
 
-            if (IsPortalOpeningContact(
-                portal, hit.point, hullHalfExtents, hullRotation))
+            if (FitsPortalWallPassage(
+                    portal,
+                    hullCenter,
+                    hullHalfExtents,
+                    hullRotation,
+                    hullSweepDelta,
+                    false) &&
+                IsPortalOpeningContact(
+                    portal, hit, hullHalfExtents, hullRotation))
                 return true;
         }
 
@@ -886,7 +895,7 @@ public class Portal : MonoBehaviour
                 nearest = hit;
                 nearestDistance = distance;
                 contactedTransitionRamp = rampContact &&
-                    rampFraction <= hit.distance / localDistance + 0.0001f;
+                    rampFraction <= planeFraction + 0.0001f;
                 found = true;
             }
         }
@@ -1181,32 +1190,52 @@ public class Portal : MonoBehaviour
                 remoteEnd - remoteStart,
                 false) &&
             IsPortalOpeningContact(
-                exit, hit.point, hullHalfExtents, hullRotation);
+                exit, hit, hullHalfExtents, hullRotation);
     }
 
     private static bool IsPortalOpeningContact(
         Portal portal,
-        Vector3 contactPoint,
+        RaycastHit hit,
         Vector3 hullHalfExtents,
         Quaternion hullRotation)
     {
         Vector3 normal = GetPortalPlaneNormal(portal);
-        Vector3 offset = contactPoint - portal.transform.position;
+        Vector3 hitNormal = hit.normal.normalized;
+        if (hitNormal.sqrMagnitude < 0.5f ||
+            Mathf.Abs(Vector3.Dot(hitNormal, normal)) < 0.95f)
+            return false;
+
+        Vector3 offset = hit.point - portal.transform.position;
+        Vector3 hullRight = hullRotation * Vector3.right;
+        Vector3 hullUp = hullRotation * Vector3.up;
+        Vector3 hullForward = hullRotation * Vector3.forward;
         float normalExtent = ProjectHalfExtent(
             normal,
-            hullRotation * Vector3.right,
-            hullRotation * Vector3.up,
-            hullRotation * Vector3.forward,
+            hullRight,
+            hullUp,
+            hullForward,
             hullHalfExtents);
         if (Mathf.Abs(Vector3.Dot(offset, normal)) >
             PlayerCutoutDepth + normalExtent + PlayerCutoutTolerance)
             return false;
 
         Vector3 halfSize = portal.GetPortalHalfSizeWorld();
+        float rightExtent = ProjectHalfExtent(
+            portal.transform.right,
+            hullRight,
+            hullUp,
+            hullForward,
+            hullHalfExtents);
+        float upExtent = ProjectHalfExtent(
+            portal.transform.up,
+            hullRight,
+            hullUp,
+            hullForward,
+            hullHalfExtents);
         return Mathf.Abs(Vector3.Dot(offset, portal.transform.right)) <=
-                halfSize.x + PlayerCutoutTolerance &&
+                halfSize.x + rightExtent + PlayerCutoutTolerance &&
             Mathf.Abs(Vector3.Dot(offset, portal.transform.up)) <=
-                halfSize.y + PlayerCutoutTolerance;
+                halfSize.y + upExtent + PlayerCutoutTolerance;
     }
 
     private static bool FitsPortalWallPassage(

@@ -564,9 +564,11 @@ namespace RidahFPS.Controllers
                 hitCollision = true;
                 if (Portal.IsPairedPortalWallContact(
                     nearest,
+                    _lastBoxQueryCenter,
                     _lastBoxQueryHalfExtents +
                         Vector3.one * CollisionSkin,
-                    _lastBoxQueryRotation))
+                    _lastBoxQueryRotation,
+                    _lastBoxQuerySweepDelta))
                     hitPortalWall = true;
                 if (fraction > 0f)
                 {
@@ -875,9 +877,11 @@ namespace RidahFPS.Controllers
             {
                 if (Portal.IsPairedPortalWallContact(
                     upHit,
+                    _lastBoxQueryCenter,
                     _lastBoxQueryHalfExtents +
                         Vector3.one * CollisionSkin,
-                    _lastBoxQueryRotation))
+                    _lastBoxQueryRotation,
+                    _lastBoxQuerySweepDelta))
                     return false;
 
                 float availableRise = Mathf.Max(
@@ -931,9 +935,11 @@ namespace RidahFPS.Controllers
             if (!downHitFound ||
                 Portal.IsPairedPortalWallContact(
                     downHit,
+                    _lastBoxQueryCenter,
                     _lastBoxQueryHalfExtents +
                         Vector3.one * CollisionSkin,
-                    _lastBoxQueryRotation) ||
+                    _lastBoxQueryRotation,
+                    _lastBoxQuerySweepDelta) ||
                 (downNormal < WalkableNormal &&
                  !(downHitPortalRamp && downNormal > 0f)))
                 return false;
