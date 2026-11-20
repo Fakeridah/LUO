@@ -13,6 +13,7 @@ public class RecursivePortalCamera : MonoBehaviour
 {
     private const int PortalCount = 2;
     private const int SourceDefaultRecursionDepth = 2;
+    private const int SourceMaxRecursionDepth = 10;
     private const float HammerUnitsPerUnityUnit = 52.4934383202f;
     private const float SourceClipOffsetHammerUnits = 2f;
     private const float SourceClipCameraEpsilonHammerUnits = 1f;
@@ -27,7 +28,7 @@ public class RecursivePortalCamera : MonoBehaviour
     [SerializeField]
     private Camera portalCamera;
 
-    [SerializeField, Range(1, SourceDefaultRecursionDepth)]
+    [SerializeField, Range(1, SourceMaxRecursionDepth)]
     private int recursionDepth = SourceDefaultRecursionDepth;
 
     private RenderTexture[,] portalTextures = new RenderTexture[PortalCount, 0];
@@ -92,7 +93,7 @@ public class RecursivePortalCamera : MonoBehaviour
         int height = mainCamera != null ? mainCamera.pixelHeight : Screen.height;
         width = Mathf.Max(1, width);
         height = Mathf.Max(1, height);
-        int depth = Mathf.Clamp(recursionDepth, 1, SourceDefaultRecursionDepth);
+        int depth = Mathf.Clamp(recursionDepth, 1, SourceMaxRecursionDepth);
 
         if (portalTextures.GetLength(1) == depth &&
             portalTextures[0, 0] != null &&
@@ -189,7 +190,16 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
         for (int i = 0; i < PortalCount; ++i)
-            BindPortalTexture(i, null);
+        {
+            if (portals != null && i < portals.Length &&
+                portals[i] != null && portals[i].Renderer != null)
+            {
+                // MaterialPropertyBlock.SetTexture rejects null textures.
+                // This component owns these per-renderer overrides, so remove
+                // the block itself before releasing its render textures.
+                portals[i].Renderer.SetPropertyBlock(null);
+            }
+        }
         ReleaseRenderTextures();
 
         if (terminalStaticTexture != null)
