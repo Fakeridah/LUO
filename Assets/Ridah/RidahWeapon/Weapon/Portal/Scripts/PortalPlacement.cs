@@ -107,16 +107,20 @@ public class PortalPlacement : WeaponController
     private void FirePortal(int portalID, Vector3 position, Vector3 direction,
         float distance)
     {
+        Portal portal = portals.Portals[portalID];
+        if (portal == null)
+            return;
+
+        int queryMask = raycastMask.value | portal.PlacementMask.value;
         RaycastHit hit;
         if (!Physics.Raycast(position, direction, out hit, distance,
-            raycastMask, QueryTriggerInteraction.Ignore))
+            queryMask, QueryTriggerInteraction.Ignore))
             return;
 
-        int wallLayer = LayerMask.NameToLayer("Wall");
-        if (wallLayer < 0 || hit.collider.gameObject.layer != wallLayer)
+        int hitLayerMask = 1 << hit.collider.gameObject.layer;
+        if ((portal.PlacementMask.value & hitLayerMask) == 0)
             return;
 
-        Portal portal = portals.Portals[portalID];
         Vector3 portalForward = -hit.normal;
         Vector3 portalRight = Vector3.ProjectOnPlane(
             mainCamera.transform.right, hit.normal);

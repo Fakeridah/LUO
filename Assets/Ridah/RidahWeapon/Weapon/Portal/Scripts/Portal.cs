@@ -53,6 +53,7 @@ public class Portal : MonoBehaviour
 
     public Renderer Renderer { get; private set; }
     public Collider WallCollider => wallCollider;
+    public LayerMask PlacementMask => placementMask;
 
     // Kept for compatibility with the existing weapon and prefab wiring.
     public bool placeEabled = true;
