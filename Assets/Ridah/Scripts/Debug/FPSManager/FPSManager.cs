@@ -37,7 +37,7 @@ public class FPSManager : Manager
             FPSRoot.SetActive(!FPSRoot.activeInHierarchy);
         }
 
-        if (FPSRoot.activeInHierarchy)
+        if (FPSRoot != null && FPSRoot.activeInHierarchy)
         {
             if (FPSCounter != null)
                 FPSCounter.text = $"FPS: {((1.0f / dt).ToString("F1"))}";
@@ -129,6 +129,9 @@ public class FPSManager : Manager
     Material m_VisDraw;
     void InitVisualizer()
     {
+        if (visualizerImage == null || updateShader == null || drawShader == null || VizHeatMap == null)
+            return;
+
         m_VisSampler = new CustomRenderTexture(SAMPLES, 1, RenderTextureFormat.RHalf);
         m_VisSampler.initializationMode = CustomRenderTextureUpdateMode.OnLoad;
         m_VisSampler.initializationColor = Color.black;
@@ -166,8 +169,11 @@ public class FPSManager : Manager
 
     void UpdateViz(float dt)
     {
-        if (m_VisSampler == null)
+        if (m_VisSampler == null || m_VisUpdate == null || m_VisDraw == null)
             InitVisualizer();
+
+        if (m_VisSampler == null || m_VisUpdate == null || m_VisDraw == null)
+            return;
 
         lastsamples.Enqueue(dt);
         if (lastsamples.Count > SAMPLES)

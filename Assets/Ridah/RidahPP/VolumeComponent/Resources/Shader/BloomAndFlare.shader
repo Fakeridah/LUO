@@ -10,7 +10,6 @@ Shader "Ridah/Post-Processing/BloomAndFlare"
         #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRendering.hlsl"
 
-        float4 _BlitTexture_TexelSize;
 
         TEXTURE2D_X(_SourceTexLowMip);
         float4 _SourceTexLowMip_TexelSize;
