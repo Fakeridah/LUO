@@ -220,9 +220,9 @@ public class RecursivePortalCamera : MonoBehaviour
         portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
             planeCamera);
 
-        // Source's texture path sets remaining view depth to zero. Do not let
-        // either portal aperture sample a texture while that texture is being
-        // rendered; the portal frames remain visible in the remote view.
+        // Source's texture path sets remaining view depth to zero. Hide both
+        // aperture renderers to prevent RT feedback; child renderers and their
+        // authored camera culling rules remain untouched.
         Renderer entrySurface = entryPortal.Renderer;
         Renderer exitSurface = exitPortal.Renderer;
         bool entrySurfaceWasEnabled =
