@@ -21,8 +21,7 @@ public class RecursivePortalCamera : MonoBehaviour
     private readonly Dictionary<string, RenderTexture> portalTextures =
         new Dictionary<string, RenderTexture>();
     private readonly List<int> renderPath = new List<int>(4);
-    private readonly MaterialPropertyBlock portalPropertyBlock =
-        new MaterialPropertyBlock();
+    private MaterialPropertyBlock portalPropertyBlock;
     private int textureWidth;
     private int textureHeight;
     private int allocatedDepth;
@@ -34,6 +33,7 @@ public class RecursivePortalCamera : MonoBehaviour
 
     private void Awake()
     {
+        portalPropertyBlock = new MaterialPropertyBlock();
         ResolveCameras();
         EnsureRenderTextures();
     }
