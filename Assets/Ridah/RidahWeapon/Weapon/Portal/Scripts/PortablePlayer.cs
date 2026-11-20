@@ -6,32 +6,94 @@ public class PortablePlayer : MonoBehaviour
 {
     private LZM player;
     private PlayerAiming playerAiming;
+    private Camera playerCamera;
+    private Portal portalEnvironment;
+    private bool hasPendingPortalEyeOffset;
+    private Vector3 pendingPortalEyePosition;
 
     public LZM Player => player != null ? player : (player = GetComponent<LZM>());
+    public Portal PortalEnvironment => portalEnvironment;
 
     public Vector3 GetEyePosition()
     {
-        if (playerAiming == null)
-            playerAiming = GetComponentInChildren<PlayerAiming>();
-        return playerAiming != null
-            ? playerAiming.transform.position
-            : transform.position;
+        if (playerCamera == null)
+            playerCamera = GetComponentInChildren<Camera>();
+        return playerCamera != null
+            ? playerCamera.transform.position
+            : GetBaseEyePosition() + GetPortalEyeOffset();
     }
 
-    public void ApplyPortalEyeOffset(Vector3 transformedOldEyePosition)
+    /// <summary>
+    /// CPortalGameMovement captures mv->GetAbsOrigin()+GetViewOffset before
+    /// applying a teleport, without the render-only eye interpolation offset.
+    /// </summary>
+    public Vector3 GetMovementEyePosition()
+    {
+        return GetBaseEyePosition();
+    }
+
+    public Vector3 GetBaseEyePosition()
     {
         if (playerAiming == null)
             playerAiming = GetComponentInChildren<PlayerAiming>();
         if (playerAiming != null)
+            return playerAiming.GetPortalBaseEyePosition();
+
+        if (playerCamera == null)
+            playerCamera = GetComponentInChildren<Camera>();
+        return playerCamera != null
+            ? playerCamera.transform.position
+            : transform.position;
+    }
+
+    public Vector3 GetPortalEyeOffset()
+    {
+        if (playerAiming == null)
+            playerAiming = GetComponentInChildren<PlayerAiming>();
+        return playerAiming != null
+            ? playerAiming.PortalEyeOffsetWorld
+            : Vector3.zero;
+    }
+
+    public void QueuePortalEyeOffset(Vector3 transformedOldEyePosition)
+    {
+        pendingPortalEyePosition = transformedOldEyePosition;
+        hasPendingPortalEyeOffset = true;
+    }
+
+    public void ApplyPendingPortalEyeOffset()
+    {
+        if (!hasPendingPortalEyeOffset)
+            return;
+
+        if (playerAiming == null)
+            playerAiming = GetComponentInChildren<PlayerAiming>();
+        if (playerAiming != null)
             playerAiming.SetPortalEyeOffset(
-                transformedOldEyePosition,
-                playerAiming.transform.position);
+                pendingPortalEyePosition,
+                GetBaseEyePosition());
+        hasPendingPortalEyeOffset = false;
+    }
+
+    /// <summary>
+    /// Tracks the portal collision environment selected by the movement
+    /// crossing, as C_Portal_Player::m_hPortalEnvironment does.
+    /// </summary>
+    public void RecordPortalTransition(Portal exitPortal)
+    {
+        portalEnvironment = exitPortal;
+    }
+
+    public void SetPortalEnvironment(Portal environment)
+    {
+        portalEnvironment = environment;
     }
 
     private void Awake()
     {
         player = GetComponent<LZM>();
         playerAiming = GetComponentInChildren<PlayerAiming>();
+        playerCamera = GetComponentInChildren<Camera>();
     }
 
     /// <summary>

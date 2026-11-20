@@ -16,7 +16,6 @@ public class RecursivePortalCamera : MonoBehaviour
     private const int SourceMaxRecursionDepth = 10;
     private const float HammerUnitsPerUnityUnit = 52.4934383202f;
     private const float SourceClipOffsetHammerUnits = 2f;
-    private const float SourceClipCameraEpsilonHammerUnits = 1f;
     private const float SourceFrustumEpsilonHammerUnits = 0.01f;
 
     [SerializeField]
@@ -41,6 +40,9 @@ public class RecursivePortalCamera : MonoBehaviour
     private int textureHeight;
     private int allocatedDepth;
     private bool rendering;
+    private bool mainCameraPoseOverridden;
+    private Vector3 previousMainCameraLocalPosition;
+    private Quaternion previousMainCameraLocalRotation;
 
     private static readonly int MainTextureId = Shader.PropertyToID("_MainTex");
     private static readonly Quaternion PortalHalfTurn =
@@ -182,16 +184,21 @@ public class RecursivePortalCamera : MonoBehaviour
     private void OnEnable()
     {
         RenderPipeline.beginCameraRendering += UpdateCamera;
+        RenderPipeline.endCameraRendering += RestoreMainCameraAfterRender;
     }
 
     private void OnDisable()
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
+        RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
+        RestoreMainCameraPose();
     }
 
     private void OnDestroy()
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
+        RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
+        RestoreMainCameraPose();
         for (int i = 0; i < PortalCount; ++i)
         {
             if (portals != null && i < portals.Length &&
@@ -242,7 +249,16 @@ public class RecursivePortalCamera : MonoBehaviour
     private void UpdateCamera(ScriptableRenderContext context, Camera camera)
     {
         ResolveCameras();
-        if (rendering || camera != mainCamera || mainCamera == null ||
+        if (camera != mainCamera || mainCamera == null)
+            return;
+
+        // CalcPortalView changes the rendered eye pose without moving the
+        // player entity. Apply that pose before either the portal RTs or the
+        // main camera are culled, then restore the gameplay camera afterward.
+        RestoreMainCameraPose();
+        ApplyMainCameraPortalPose();
+
+        if (rendering ||
             portalCamera == null || portals == null ||
             portals.Length < PortalCount || portals[0] == null ||
             portals[1] == null || !portals[0].isPlaced ||
@@ -275,9 +291,7 @@ public class RecursivePortalCamera : MonoBehaviour
                     ? CameraClearFlags.SolidColor
                     : mainCamera.clearFlags;
             portalCamera.backgroundColor = mainCamera.backgroundColor;
-            portalCamera.nearClipPlane = Mathf.Max(
-                mainCamera.nearClipPlane,
-                1f / HammerUnitsPerUnityUnit);
+            portalCamera.nearClipPlane = mainCamera.nearClipPlane;
             portalCamera.farClipPlane = mainCamera.farClipPlane;
             portalCamera.aspect = mainCamera.aspect;
 
@@ -308,6 +322,53 @@ public class RecursivePortalCamera : MonoBehaviour
             BindMainViewTextures();
             rendering = false;
         }
+    }
+
+    private void ApplyMainCameraPortalPose()
+    {
+        PortablePlayer player =
+            mainCamera.GetComponentInParent<PortablePlayer>();
+        if (player == null)
+            return;
+
+        // PlayerAiming applies Source's decaying eye offset to the child
+        // camera on both movement and render ticks. Use that actual rendered
+        // eye once; adding the offset again would double it.
+        Vector3 eyePosition = player.GetEyePosition();
+        Quaternion eyeRotation = mainCamera.transform.rotation;
+        bool portalViewMapped = Portal.TryGetPortalViewPose(
+            player,
+            eyePosition,
+            eyeRotation,
+            out Vector3 viewPosition,
+            out Quaternion viewRotation);
+        if (!portalViewMapped &&
+            player.GetPortalEyeOffset().sqrMagnitude <= 0.00000001f)
+            return;
+
+        Transform cameraTransform = mainCamera.transform;
+        previousMainCameraLocalPosition = cameraTransform.localPosition;
+        previousMainCameraLocalRotation = cameraTransform.localRotation;
+        mainCameraPoseOverridden = true;
+        cameraTransform.SetPositionAndRotation(viewPosition, viewRotation);
+    }
+
+    private void RestoreMainCameraAfterRender(
+        ScriptableRenderContext context,
+        Camera camera)
+    {
+        if (camera == mainCamera)
+            RestoreMainCameraPose();
+    }
+
+    private void RestoreMainCameraPose()
+    {
+        if (!mainCameraPoseOverridden || mainCamera == null)
+            return;
+
+        mainCamera.transform.localPosition = previousMainCameraLocalPosition;
+        mainCamera.transform.localRotation = previousMainCameraLocalRotation;
+        mainCameraPoseOverridden = false;
     }
 
     private void RenderPortalView(
@@ -344,7 +405,8 @@ public class RecursivePortalCamera : MonoBehaviour
             portalViewPositions.Add(virtualPosition);
             portalViewRotations.Add(virtualRotation);
 
-            ConfigurePortalCamera(exitPortal, virtualPosition, virtualRotation);
+            ConfigurePortalCamera(
+                exitPortal, virtualPosition, virtualRotation);
             if (depth + 1 >= allocatedDepth ||
                 !ShouldUpdatePortalView(
                     entryPortal, portalCamera, depth + 1))
@@ -426,7 +488,7 @@ public class RecursivePortalCamera : MonoBehaviour
             virtualPosition, virtualRotation);
         portalCamera.ResetWorldToCameraMatrix();
         portalCamera.targetTexture = null;
-        portalCamera.projectionMatrix = mainCamera.projectionMatrix;
+        ConfigurePortalProjection();
 
         // Source clips against the exit portal's forward plane, offset two
         // Hammer units behind it to avoid z-fighting with crossing geometry.
@@ -439,14 +501,6 @@ public class RecursivePortalCamera : MonoBehaviour
         float planeW = Vector3.Dot(
             clipNormal, exitPortal.transform.position) - clipOffset;
 
-        // Source moves the oblique plane forward if it would fall behind the
-        // virtual eye, which would otherwise make the projection degenerate.
-        float cameraDistance = Vector3.Dot(clipNormal, virtualPosition) - planeW;
-        float cameraEpsilon = SourceClipCameraEpsilonHammerUnits /
-            HammerUnitsPerUnityUnit;
-        if (cameraDistance > -cameraEpsilon)
-            planeW += cameraDistance + cameraEpsilon;
-
         Vector4 planeWorld = new Vector4(
             clipNormal.x,
             clipNormal.y,
@@ -456,6 +510,39 @@ public class RecursivePortalCamera : MonoBehaviour
             portalCamera.worldToCameraMatrix)) * planeWorld;
         portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
             planeCamera);
+    }
+
+    private void ConfigurePortalProjection()
+    {
+        portalCamera.orthographic = mainCamera.orthographic;
+        portalCamera.aspect = mainCamera.aspect;
+        portalCamera.nearClipPlane = mainCamera.nearClipPlane;
+        portalCamera.farClipPlane = mainCamera.farClipPlane;
+        // Source adds the exit portal to its visibility set before drawing a
+        // portal view. Unity has no matching per-view PVS injection, so baked
+        // occlusion can hide valid geometry in the remote scene.
+        portalCamera.useOcclusionCulling = false;
+
+        if (mainCamera.usePhysicalProperties)
+        {
+            portalCamera.usePhysicalProperties = true;
+            portalCamera.sensorSize = mainCamera.sensorSize;
+            portalCamera.focalLength = mainCamera.focalLength;
+            portalCamera.lensShift = mainCamera.lensShift;
+            portalCamera.gateFit = mainCamera.gateFit;
+        }
+        else
+        {
+            portalCamera.usePhysicalProperties = false;
+            if (mainCamera.orthographic)
+                portalCamera.orthographicSize = mainCamera.orthographicSize;
+            else
+                portalCamera.fieldOfView = mainCamera.fieldOfView;
+        }
+
+        // Source's portal view copies cameraView.zNear. Rebuild the projection
+        // from the matching camera settings before applying the exit plane.
+        portalCamera.ResetProjectionMatrix();
     }
 
     private static bool ShouldUpdatePortalView(
@@ -471,8 +558,8 @@ public class RecursivePortalCamera : MonoBehaviour
         float halfHeight = localBounds.extents.y *
             Mathf.Abs(portal.transform.lossyScale.y);
 
-        // Source keeps the root view alive while the player is close to the
-        // aperture so the near-plane render fix does not disappear.
+        // Source skips its complex through-portal frustum while the view is
+        // close to the aperture; keep the root portal view eligible here.
         if (recursionLevel == 0 &&
             (portal.transform.position - viewCamera.transform.position)
                 .sqrMagnitude < halfHeight * halfHeight)

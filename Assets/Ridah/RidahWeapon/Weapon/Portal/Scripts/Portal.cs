@@ -15,6 +15,10 @@ public class Portal : MonoBehaviour
     private const float PlayerCutoutMargin = 0.35f;
     private const float PlayerCutoutTolerance = 0.02f;
     private const float HammerUnitsPerUnityUnit = 52.4934383202f;
+    private const float SourcePortalQuadTestEpsilon =
+        -0.03125f / HammerUnitsPerUnityUnit;
+    private const float SourcePortalQuadMargin =
+        1f / HammerUnitsPerUnityUnit;
 
     public bool activeStart = false;
     public bool isPlaced = false;
@@ -736,7 +740,7 @@ public class Portal : MonoBehaviour
         Vector3 transformedCenter = MapPortalPoint(
             entryPortal, exitPortal, currentCenter);
         transformedOldEyePosition = MapPortalPoint(
-            entryPortal, exitPortal, player.GetEyePosition());
+            entryPortal, exitPortal, player.GetMovementEyePosition());
         Vector3 exitCenterOffset = forceDuck
             ? movementUp * duckHullHalfExtents.y
             : centerOffset;
@@ -1117,6 +1121,204 @@ public class Portal : MonoBehaviour
         return -portal.transform.forward;
     }
 
+    /// <summary>
+    /// Mirrors CPortalGameMovement's per-command portal environment selection:
+    /// sweep the movement hull against linked portal planes, apply the
+    /// previous-environment back-side exception, then keep the nearest portal
+    /// whose aperture intersects the hull.
+    /// </summary>
+    public static Portal FindPlayerPortalEnvironment(
+        Vector3 previousRootPosition,
+        Vector3 currentRootPosition,
+        Vector3 hullHalfExtents,
+        Vector3 movementUp,
+        Portal previousEnvironment)
+    {
+        if (movementUp.sqrMagnitude < 0.5f)
+            return null;
+
+        movementUp.Normalize();
+        Vector3 centerOffset = movementUp * hullHalfExtents.y;
+        Vector3 previousCenter = previousRootPosition + centerOffset;
+        Vector3 currentCenter = currentRootPosition + centerOffset;
+        Vector3 sweepDelta = currentCenter - previousCenter;
+        Portal nearestPortal = null;
+        float nearestDistanceSquared = float.PositiveInfinity;
+
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal portal = ActivePortals[i];
+            if (!HasActivePair(portal))
+                continue;
+
+            Vector3 normal = GetPortalPlaneNormal(portal);
+            float startDistance = Vector3.Dot(
+                previousCenter - portal.transform.position, normal);
+            float endDistance = Vector3.Dot(
+                currentCenter - portal.transform.position, normal);
+
+            // Source keeps the current portal environment if an external
+            // push has already moved the player behind its plane.
+            if (startDistance <= 0f && portal != previousEnvironment)
+                continue;
+
+            if (!FitsPortalWallPassage(
+                    portal,
+                    previousCenter,
+                    hullHalfExtents,
+                    Quaternion.identity,
+                    sweepDelta,
+                    false))
+                continue;
+
+            Vector3 portalHalfSize = portal.GetPortalHalfSizeWorld();
+            if (endDistance < 0f)
+            {
+                // Once the center is behind the plane, Source requires the
+                // center itself to remain over the portal quad.
+                Vector3 projectedCenter = currentCenter - normal * endDistance;
+                Vector3 centerOffsetFromPortal =
+                    projectedCenter - portal.transform.position;
+                if (Mathf.Abs(Vector3.Dot(
+                        centerOffsetFromPortal, portal.transform.right)) >
+                        portalHalfSize.x ||
+                    Mathf.Abs(Vector3.Dot(
+                        centerOffsetFromPortal, portal.transform.up)) >
+                        portalHalfSize.y)
+                    continue;
+            }
+            else
+            {
+                // Match Source's most-penetrating AABB extent and its
+                // portal_player_interaction_quadtest_epsilon edge check.
+                Vector3 testExtent = currentCenter;
+                testExtent.x -= Sign(normal.x) * hullHalfExtents.x;
+                testExtent.y -= Sign(normal.y) * hullHalfExtents.y;
+                testExtent.z -= Sign(normal.z) * hullHalfExtents.z;
+                float testDistance = Vector3.Dot(
+                    testExtent - portal.transform.position, normal);
+                if (testDistance < SourcePortalQuadTestEpsilon)
+                {
+                    float totalDistance = endDistance - testDistance;
+                    if (Mathf.Abs(totalDistance) > 0.000001f)
+                    {
+                        Vector3 planePoint =
+                            testExtent * (endDistance / totalDistance) -
+                            currentCenter * (testDistance / totalDistance);
+                        Vector3 offsetFromPortal =
+                            planePoint - portal.transform.position;
+                        if (Mathf.Abs(Vector3.Dot(
+                                offsetFromPortal, portal.transform.right)) >
+                                portalHalfSize.x + SourcePortalQuadMargin ||
+                            Mathf.Abs(Vector3.Dot(
+                                offsetFromPortal, portal.transform.up)) >
+                                portalHalfSize.y + SourcePortalQuadMargin)
+                            continue;
+                    }
+                }
+            }
+
+            float distanceSquared =
+                (portal.transform.position - currentCenter).sqrMagnitude;
+            if (distanceSquared < nearestDistanceSquared)
+            {
+                nearestPortal = portal;
+                nearestDistanceSquared = distanceSquared;
+            }
+        }
+
+        return nearestPortal;
+    }
+
+    /// <summary>
+    /// Mirrors C_Portal_Player::CalcPortalView for the local rendered eye.
+    /// While the eye has crossed but the body render origin has not, the eye
+    /// is transformed through the portal only when their segment intersects
+    /// the aperture. After a body teleport, the recorded portal environment
+    /// supplies Source's fallback for an eye that remains behind that plane.
+    /// </summary>
+    public static bool TryGetPortalViewPose(
+        PortablePlayer player,
+        Vector3 eyePosition,
+        Quaternion eyeRotation,
+        out Vector3 viewPosition,
+        out Quaternion viewRotation)
+    {
+        viewPosition = eyePosition;
+        viewRotation = eyeRotation;
+        if (player == null)
+            return false;
+
+        Vector3 bodyRenderOrigin = player.transform.position;
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal portal = ActivePortals[i];
+            if (!HasActivePair(portal))
+                continue;
+
+            Vector3 planeNormal = GetPortalPlaneNormal(portal);
+            float eyeDistance = Vector3.Dot(
+                eyePosition - portal.transform.position, planeNormal);
+            float bodyDistance = Vector3.Dot(
+                bodyRenderOrigin - portal.transform.position, planeNormal);
+            if (eyeDistance >= 0f || bodyDistance < 0f)
+                continue;
+
+            float totalDistance = bodyDistance - eyeDistance;
+            if (totalDistance <= 0f)
+                continue;
+
+            // Source intersects the line from render origin to eye against
+            // the portal plane, then rejects views whose crossing point lies
+            // outside the portal's actual half-width and half-height.
+            Vector3 intersection =
+                eyePosition * (bodyDistance / totalDistance) -
+                bodyRenderOrigin * (eyeDistance / totalDistance);
+            Vector3 centerToIntersection =
+                intersection - portal.transform.position;
+            Vector3 portalHalfSize = portal.GetPortalHalfSizeWorld();
+            if (Mathf.Abs(Vector3.Dot(
+                    centerToIntersection, portal.transform.right)) >
+                    portalHalfSize.x ||
+                Mathf.Abs(Vector3.Dot(
+                    centerToIntersection, portal.transform.up)) >
+                    portalHalfSize.y)
+                continue;
+
+            TransformPortalView(
+                portal, eyePosition, eyeRotation,
+                out viewPosition, out viewRotation);
+            return true;
+        }
+
+        Portal environment = player.PortalEnvironment;
+        if (!HasActivePair(environment))
+            return false;
+
+        float environmentEyeDistance = Vector3.Dot(
+            eyePosition - environment.transform.position,
+            GetPortalPlaneNormal(environment));
+        if (environmentEyeDistance >= 0f)
+            return false;
+
+        TransformPortalView(
+            environment, eyePosition, eyeRotation,
+            out viewPosition, out viewRotation);
+        return true;
+    }
+
+    private static void TransformPortalView(
+        Portal entry,
+        Vector3 eyePosition,
+        Quaternion eyeRotation,
+        out Vector3 viewPosition,
+        out Quaternion viewRotation)
+    {
+        Portal exit = entry.otherPortal;
+        viewPosition = MapPortalPoint(entry, exit, eyePosition);
+        viewRotation = GetPortalRotation(entry, exit) * eyeRotation;
+    }
+
     private static bool ShouldForcePortalCrouch(
         Portal entry,
         Vector3 movementUp)
@@ -1306,6 +1508,11 @@ public class Portal : MonoBehaviour
         return Mathf.Abs(Vector3.Dot(axis, hullRight)) * hullHalfExtents.x +
             Mathf.Abs(Vector3.Dot(axis, hullUp)) * hullHalfExtents.y +
             Mathf.Abs(Vector3.Dot(axis, hullForward)) * hullHalfExtents.z;
+    }
+
+    private static float Sign(float value)
+    {
+        return value > 0f ? 1f : value < 0f ? -1f : 0f;
     }
 
     private Vector3 GetPortalHalfSize()

@@ -80,6 +80,8 @@ namespace RidahFPS.Controllers
         private readonly List<Collider> _triggers = new List<Collider>();
         private float _lastGokzViewYaw;
         private bool _hasGokzViewYaw;
+        private PlayerAiming playerAiming;
+        private PortablePlayer portablePlayer;
 
         public MoveData MoveData => _moveData;
         public CharacterController CC => cc;
@@ -110,6 +112,8 @@ namespace RidahFPS.Controllers
             }
 
             TransformInit();
+            playerAiming = GetComponentInChildren<PlayerAiming>();
+            portablePlayer = GetComponent<PortablePlayer>();
             gokzFeatures = GetComponent<GokzPlayerFeatures>();
             _movement.EnableSourceCollision(this);
             Time.fixedDeltaTime = SourceMovementCore.TickInterval;
@@ -143,6 +147,9 @@ namespace RidahFPS.Controllers
             }
 
             UpdateMovement();
+            if (playerAiming != null)
+                playerAiming.AdvancePortalEyeOffset(
+                    SourceMovementCore.TickInterval);
             UpdateGravityEFX();
             UpdateFollowing();
             UpdateResetPos();
@@ -223,6 +230,8 @@ namespace RidahFPS.Controllers
 
             _moveData.wishJump = false;
             UpdateGoKzViewHeight();
+            if (portablePlayer != null)
+                portablePlayer.ApplyPendingPortalEyeOffset();
             _moveData.Origin = transform.position;
             prevPosition = transform.position;
         }
