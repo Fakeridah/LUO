@@ -147,12 +147,12 @@ public class RecursivePortalCamera : MonoBehaviour
         Matrix4x4 previousProjection = portalCamera.projectionMatrix;
         CameraClearFlags previousClearFlags = portalCamera.clearFlags;
         Color previousBackground = portalCamera.backgroundColor;
-        int previousCullingMask = portalCamera.cullingMask;
         float previousNearClip = portalCamera.nearClipPlane;
         float previousFarClip = portalCamera.farClipPlane;
         try
         {
-            portalCamera.cullingMask = mainCamera.cullingMask;
+            // Keep the portal camera's prefab culling mask. It deliberately
+            // excludes the Player layer, unlike the first-person camera.
             portalCamera.clearFlags = mainCamera.clearFlags;
             portalCamera.backgroundColor = mainCamera.backgroundColor;
             portalCamera.nearClipPlane = mainCamera.nearClipPlane;
@@ -170,7 +170,6 @@ public class RecursivePortalCamera : MonoBehaviour
             portalCamera.projectionMatrix = previousProjection;
             portalCamera.clearFlags = previousClearFlags;
             portalCamera.backgroundColor = previousBackground;
-            portalCamera.cullingMask = previousCullingMask;
             portalCamera.nearClipPlane = previousNearClip;
             portalCamera.farClipPlane = previousFarClip;
             rendering = false;
@@ -221,6 +220,31 @@ public class RecursivePortalCamera : MonoBehaviour
         portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
             planeCamera);
 
-        UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
+        // Source's texture path sets remaining view depth to zero. Do not let
+        // either portal aperture sample a texture while that texture is being
+        // rendered; the portal frames remain visible in the remote view.
+        Renderer entrySurface = entryPortal.Renderer;
+        Renderer exitSurface = exitPortal.Renderer;
+        bool entrySurfaceWasEnabled =
+            entrySurface != null && entrySurface.enabled;
+        bool exitSurfaceWasEnabled =
+            exitSurface != null && exitSurface.enabled;
+
+        if (entrySurface != null)
+            entrySurface.enabled = false;
+        if (exitSurface != null)
+            exitSurface.enabled = false;
+
+        try
+        {
+            UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
+        }
+        finally
+        {
+            if (entrySurface != null)
+                entrySurface.enabled = entrySurfaceWasEnabled;
+            if (exitSurface != null)
+                exitSurface.enabled = exitSurfaceWasEnabled;
+        }
     }
 }
