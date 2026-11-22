@@ -5,7 +5,6 @@
 
 //Always present in every shader
 TEXTURE2D(_MainTex);SAMPLER(sampler_MainTex);float4 _MainTex_TexelSize;
-sampler sampler_LinearClamp;
 float4x4 _FrustumCornersRay;//用于重建世界坐标
 
 

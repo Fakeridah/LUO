@@ -65,12 +65,22 @@ namespace Ridah.Decal
                         Vector3 normal = collisionEvents[i].normal;
                         Transform surface = other.transform;
 
+<<<<<<< HEAD
                         // Use the normal physics query mask so custom layers such as Player
                         // remain eligible for the follow-up surface raycast.
                         int layerMask = Physics.DefaultRaycastLayers;
 
                         // Collision intersections can lie on or slightly inside the collider.
                         // Start just outside the surface and cast back into it.
+=======
+                        // The level mesh and player collision hull use the custom Player layer.
+                        // Use Unity's normal raycast layers so the follow-up query sees the same
+                        // custom-layer surfaces that the particle collision module can hit.
+                        int layerMask = Physics.DefaultRaycastLayers;
+
+                        // Particle collision intersections can be on or slightly inside the
+                        // collider. Start just outside the surface and cast back into it.
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
                         Vector3 normalDirection = normal.normalized;
                         if (normalDirection.sqrMagnitude > 0.0001f)
                         {
@@ -84,8 +94,13 @@ namespace Ridah.Decal
                             }
                             else
                             {
+<<<<<<< HEAD
                                 // A valid particle collision should still print if the extra
                                 // surface query misses due to contact-point precision.
+=======
+                                // Keep the collision event as a fallback so an imperfect raycast
+                                // cannot discard a valid particle collision entirely.
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
                                 position += normalDirection * 0.002f;
                             }
 

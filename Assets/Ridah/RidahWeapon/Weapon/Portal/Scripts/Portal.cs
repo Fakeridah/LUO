@@ -102,6 +102,7 @@ public class Portal : MonoBehaviour
     private const float PlayerCutoutDepth = 0.05f;
     private const float PlayerCutoutMargin = 0.35f;
     private const float PlayerCutoutTolerance = 0.02f;
+<<<<<<< HEAD
     // ClampCenterIntoOpening is always followed by a FitsPortalOpening check on
     // the centre it returned, and that check re-derives the offset from the
     // reconstructed point. Clamping exactly onto the boundary therefore lands a
@@ -189,6 +190,13 @@ public class Portal : MonoBehaviour
     private const float PatchFrontInset = 0.004f;
     private const float PatchHoleClearance = 0.04f;
     private const float PatchOuterMargin = 0.12f;
+=======
+    private const float HammerUnitsPerUnityUnit = 52.4934383202f;
+    private const float SourcePortalQuadTestEpsilon =
+        -0.03125f / HammerUnitsPerUnityUnit;
+    private const float SourcePortalQuadMargin =
+        1f / HammerUnitsPerUnityUnit;
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 
     public bool activeStart = false;
     public bool isPlaced = false;
@@ -3856,9 +3864,17 @@ public class Portal : MonoBehaviour
         // placement delta desynchronises the camera from the hull, which
         // reads as the view flying off on its own.
         transformedOldEyePosition = MapPortalPoint(
+<<<<<<< HEAD
                 entryPortal, exitPortal, player.GetMovementEyePosition()) +
             (transformedRoot - mappedRoot);
         currentRootPosition = transformedRoot;
+=======
+            entryPortal, exitPortal, player.GetMovementEyePosition());
+        Vector3 exitCenterOffset = forceDuck
+            ? movementUp * duckHullHalfExtents.y
+            : centerOffset;
+        currentRootPosition = transformedCenter - exitCenterOffset;
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 
         // HandlePortalling removes the part of this command's gravity that
         // belongs after the crossing, rotates the pre-exit velocity, then
@@ -4433,11 +4449,23 @@ public class Portal : MonoBehaviour
             if (startDistance <= 0f && portal != previousEnvironment)
                 continue;
 
+<<<<<<< HEAD
             // Source's HandlePortalling detection uses TestCollision against
             // the portal quad plus the quad-test epsilon/margin below. It has
             // no extra host-wall passage gate; adding one here drops the
             // environment near the lower/side edges, so the portal-aware
             // trace never runs and the uncarved wall stops the player.
+=======
+            if (!FitsPortalWallPassage(
+                    portal,
+                    previousCenter,
+                    hullHalfExtents,
+                    Quaternion.identity,
+                    sweepDelta,
+                    false))
+                continue;
+
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
             Vector3 portalHalfSize = portal.GetPortalHalfSizeWorld();
             if (endDistance < 0f)
             {
@@ -4497,6 +4525,98 @@ public class Portal : MonoBehaviour
         return nearestPortal;
     }
 
+<<<<<<< HEAD
+=======
+    /// <summary>
+    /// Mirrors C_Portal_Player::CalcPortalView for the local rendered eye.
+    /// While the eye has crossed but the body render origin has not, the eye
+    /// is transformed through the portal only when their segment intersects
+    /// the aperture. After a body teleport, the recorded portal environment
+    /// supplies Source's fallback for an eye that remains behind that plane.
+    /// </summary>
+    public static bool TryGetPortalViewPose(
+        PortablePlayer player,
+        Vector3 eyePosition,
+        Quaternion eyeRotation,
+        out Vector3 viewPosition,
+        out Quaternion viewRotation)
+    {
+        viewPosition = eyePosition;
+        viewRotation = eyeRotation;
+        if (player == null)
+            return false;
+
+        Vector3 bodyRenderOrigin = player.transform.position;
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal portal = ActivePortals[i];
+            if (!HasActivePair(portal))
+                continue;
+
+            Vector3 planeNormal = GetPortalPlaneNormal(portal);
+            float eyeDistance = Vector3.Dot(
+                eyePosition - portal.transform.position, planeNormal);
+            float bodyDistance = Vector3.Dot(
+                bodyRenderOrigin - portal.transform.position, planeNormal);
+            if (eyeDistance >= 0f || bodyDistance < 0f)
+                continue;
+
+            float totalDistance = bodyDistance - eyeDistance;
+            if (totalDistance <= 0f)
+                continue;
+
+            // Source intersects the line from render origin to eye against
+            // the portal plane, then rejects views whose crossing point lies
+            // outside the portal's actual half-width and half-height.
+            Vector3 intersection =
+                eyePosition * (bodyDistance / totalDistance) -
+                bodyRenderOrigin * (eyeDistance / totalDistance);
+            Vector3 centerToIntersection =
+                intersection - portal.transform.position;
+            Vector3 portalHalfSize = portal.GetPortalHalfSizeWorld();
+            if (Mathf.Abs(Vector3.Dot(
+                    centerToIntersection, portal.transform.right)) >
+                    portalHalfSize.x ||
+                Mathf.Abs(Vector3.Dot(
+                    centerToIntersection, portal.transform.up)) >
+                    portalHalfSize.y)
+                continue;
+
+            TransformPortalView(
+                portal, eyePosition, eyeRotation,
+                out viewPosition, out viewRotation);
+            return true;
+        }
+
+        Portal environment = player.PortalEnvironment;
+        if (!HasActivePair(environment))
+            return false;
+
+        float environmentEyeDistance = Vector3.Dot(
+            eyePosition - environment.transform.position,
+            GetPortalPlaneNormal(environment));
+        if (environmentEyeDistance >= 0f)
+            return false;
+
+        TransformPortalView(
+            environment, eyePosition, eyeRotation,
+            out viewPosition, out viewRotation);
+        return true;
+    }
+
+    private static void TransformPortalView(
+        Portal entry,
+        Vector3 eyePosition,
+        Quaternion eyeRotation,
+        out Vector3 viewPosition,
+        out Quaternion viewRotation)
+    {
+        Portal exit = entry.otherPortal;
+        viewPosition = MapPortalPoint(entry, exit, eyePosition);
+        viewRotation = GetPortalRotation(entry, exit) * eyeRotation;
+    }
+
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
     private static bool ShouldForcePortalCrouch(
         Portal entry,
         Vector3 movementUp,

@@ -37,10 +37,13 @@ public class FPSManager : Manager
             FPSRoot.SetActive(!FPSRoot.activeInHierarchy);
         }
 
+<<<<<<< HEAD
         // FPSRoot is optional: the prefab used by this project leaves it
         // unassigned, so the toggle above already guards it. Without the same
         // guard here every frame throws a NullReferenceException, which floods
         // the console and hides real errors.
+=======
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
         if (FPSRoot != null && FPSRoot.activeInHierarchy)
         {
             if (FPSCounter != null)
@@ -133,6 +136,9 @@ public class FPSManager : Manager
     Material m_VisDraw;
     void InitVisualizer()
     {
+        if (visualizerImage == null || updateShader == null || drawShader == null || VizHeatMap == null)
+            return;
+
         m_VisSampler = new CustomRenderTexture(SAMPLES, 1, RenderTextureFormat.RHalf);
         m_VisSampler.initializationMode = CustomRenderTextureUpdateMode.OnLoad;
         m_VisSampler.initializationColor = Color.black;
@@ -170,6 +176,7 @@ public class FPSManager : Manager
 
     void UpdateViz(float dt)
     {
+<<<<<<< HEAD
         // The visualizer is optional and this project's FPSManager prefab
         // leaves visualizerImage / updateShader / drawShader unassigned.
         // InitVisualizer would then throw from new Material(null) every frame
@@ -179,7 +186,13 @@ public class FPSManager : Manager
             return;
 
         if (m_VisSampler == null)
+=======
+        if (m_VisSampler == null || m_VisUpdate == null || m_VisDraw == null)
+>>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
             InitVisualizer();
+
+        if (m_VisSampler == null || m_VisUpdate == null || m_VisDraw == null)
+            return;
 
         lastsamples.Enqueue(dt);
         if (lastsamples.Count > SAMPLES)
