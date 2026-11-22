@@ -1087,6 +1087,18 @@ namespace RidahFPS.Controllers
                 return true;
             }
 
+            // Same zero-thickness mesh correction as the standability test:
+            // ClipVelocity needs the real ramp normal, otherwise a
+            // single-sided mesh ramp clips movement along a phantom
+            // straight-up plane.
+            if (found &&
+                TryGetPlanarMeshBlockingNormal(
+                    nearest.collider,
+                    _lastBoxQueryCenter,
+                    _lastBoxQuerySweepDelta,
+                    out Vector3 planarBlockingNormal))
+                nearest.normal = planarBlockingNormal;
+
             return found;
         }
 
@@ -1897,8 +1909,24 @@ namespace RidahFPS.Controllers
                     (_surfer != null &&
                      _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(
-                         _surfer.MoveData.playerTransform)) ||
-                    Vector3.Dot(candidate.normal, _movementUp) < WalkableNormal ||
+                         _surfer.MoveData.playerTransform)))
+                    continue;
+
+                // A zero-thickness non-convex MeshCollider (a single-quad
+                // ramp) has no volume, so PhysX reports an unreliable normal
+                // for it - typically straight up even on a steep ramp. That
+                // makes a steep single-sided ramp look standable, which is
+                // why the player could not slide on it. Rebuild the normal
+                // from the mesh's own plane so the standability test below
+                // sees the real slope angle.
+                if (TryGetPlanarMeshBlockingNormal(
+                        candidate.collider,
+                        _lastBoxQueryCenter,
+                        _lastBoxQuerySweepDelta,
+                        out Vector3 candidatePlanarNormal))
+                    candidate.normal = candidatePlanarNormal;
+
+                if (Vector3.Dot(candidate.normal, _movementUp) < WalkableNormal ||
                     candidate.distance >= nearestDistance)
                     continue;
 
@@ -1931,6 +1959,228 @@ namespace RidahFPS.Controllers
             }
 
             return found;
+        }
+
+        // A zero-thickness non-convex MeshCollider - a single-quad ramp or a
+        // Unity Plane primitive - has no volume, so PhysX has no reliable
+        // plane for it and can report a straight-up normal on a steep ramp.
+        // That makes the ramp look standable, which kills slide and makes the
+        // slope behave like flat ground. Source never has this problem
+        // because SolidBSP hands CGameMovement the real brush plane. Rebuild
+        // the plane from the mesh geometry so both the standability test and
+        // ClipVelocity see the true slope angle.
+        private struct PlanarMeshInfo
+        {
+            public bool valid;
+            public Vector3 localPoint;
+            public Vector3 localNormal;
+        }
+
+        private static readonly Dictionary<Mesh, PlanarMeshInfo>
+            _planarMeshCache = new Dictionary<Mesh, PlanarMeshInfo>();
+
+        private static bool IsZeroThicknessMesh(MeshCollider meshCollider)
+        {
+            if (meshCollider == null || meshCollider.convex)
+                return false;
+
+            Mesh mesh = meshCollider.sharedMesh;
+            if (mesh == null)
+                return false;
+
+            // Bounds are always available, even for a mesh imported without
+            // Read/Write, so this gate never depends on vertex access.
+            Vector3 size = mesh.bounds.size;
+            float smallest = Mathf.Min(size.x, Mathf.Min(size.y, size.z));
+            float largest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+            return largest > 0f &&
+                smallest <= Mathf.Max(0.00001f, largest * 0.00001f);
+        }
+
+        private static bool TryGetPlanarMeshInfo(
+            Mesh mesh,
+            out PlanarMeshInfo info)
+        {
+            info = default;
+            if (mesh == null)
+                return false;
+
+            if (_planarMeshCache.TryGetValue(mesh, out info))
+                return info.valid;
+
+            // Meshes are shared, so this analysis runs once per mesh rather
+            // than once per movement tick.
+            info = BuildPlanarMeshInfo(mesh);
+            if (_planarMeshCache.Count > 512)
+                _planarMeshCache.Clear();
+            _planarMeshCache[mesh] = info;
+            return info.valid;
+        }
+
+        private static PlanarMeshInfo BuildPlanarMeshInfo(Mesh mesh)
+        {
+            PlanarMeshInfo info = default;
+            if (mesh == null)
+                return info;
+
+            Vector3 size = mesh.bounds.size;
+            float smallest = Mathf.Min(size.x, Mathf.Min(size.y, size.z));
+            float largest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+            if (largest <= 0f ||
+                smallest > Mathf.Max(0.00001f, largest * 0.00001f))
+                return info;
+
+            // Preferred path: derive the plane from the real triangles. This
+            // is exact for any sheet orientation, not just an axis-aligned
+            // one, and the planarity test keeps a thin-but-solid mesh on
+            // PhysX's own normals.
+            if (mesh.isReadable &&
+                TryBuildTrianglePlane(
+                    mesh,
+                    out Vector3 trianglePoint,
+                    out Vector3 triangleNormal))
+            {
+                info.valid = true;
+                info.localPoint = trianglePoint;
+                info.localNormal = triangleNormal;
+                return info;
+            }
+
+            // Fallback for a mesh imported without Read/Write: a collapsed
+            // bounds axis still identifies the sheet normal when the quad was
+            // authored in one of the local planes, which is the case for
+            // Unity's Plane primitive and most single-face ramps.
+            if (size.x <= size.y && size.x <= size.z)
+                info.localNormal = Vector3.right;
+            else if (size.y <= size.z)
+                info.localNormal = Vector3.up;
+            else
+                info.localNormal = Vector3.forward;
+
+            info.valid = true;
+            info.localPoint = mesh.bounds.center;
+            return info;
+        }
+
+        private static bool TryBuildTrianglePlane(
+            Mesh mesh,
+            out Vector3 planePoint,
+            out Vector3 planeNormal)
+        {
+            planePoint = Vector3.zero;
+            planeNormal = Vector3.zero;
+
+            Vector3[] vertices = mesh.vertices;
+            int[] triangles = mesh.triangles;
+            if (vertices.Length < 3 || triangles.Length < 3)
+                return false;
+
+            // The largest triangle gives the most numerically stable plane.
+            float bestArea = 0f;
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                Vector3 a = vertices[triangles[i]];
+                Vector3 b = vertices[triangles[i + 1]];
+                Vector3 c = vertices[triangles[i + 2]];
+                Vector3 cross = Vector3.Cross(b - a, c - a);
+                float area = cross.magnitude;
+                if (area <= bestArea)
+                    continue;
+
+                bestArea = area;
+                planeNormal = cross / area;
+                planePoint = (a + b + c) / 3f;
+            }
+
+            if (bestArea <= 0f)
+                return false;
+
+            // Reject anything with real thickness. This keeps ordinary level
+            // meshes - a floor with walls, terrain, a curved shell - on
+            // PhysX's own normals instead of flattening them.
+            float tolerance = Mathf.Max(
+                0.00001f,
+                mesh.bounds.size.magnitude * 0.00001f);
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                float deviation = Mathf.Abs(
+                    Vector3.Dot(vertices[i] - planePoint, planeNormal));
+                if (deviation > tolerance)
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryGetZeroThicknessMeshPlane(
+            MeshCollider meshCollider,
+            out Vector3 worldPoint,
+            out Vector3 worldNormal)
+        {
+            worldPoint = Vector3.zero;
+            worldNormal = Vector3.zero;
+            if (!IsZeroThicknessMesh(meshCollider) ||
+                !TryGetPlanarMeshInfo(
+                    meshCollider.sharedMesh,
+                    out PlanarMeshInfo info))
+                return false;
+
+            Transform meshTransform = meshCollider.transform;
+            worldPoint = meshTransform.TransformPoint(info.localPoint);
+            // Normals transform by the inverse transpose, which is the
+            // transpose of worldToLocal; using the forward matrix would skew
+            // the slope angle under non-uniform scale.
+            worldNormal = meshTransform.worldToLocalMatrix
+                .transpose.MultiplyVector(info.localNormal);
+            float length = worldNormal.magnitude;
+            if (length <= 0.000001f)
+                return false;
+
+            worldNormal /= length;
+            return true;
+        }
+
+        // The contact normal for a zero-thickness sheet, oriented toward the
+        // side the hull is on. Returns false only when the hull sits exactly
+        // on the sheet and the sweep gives no direction to orient against.
+        private static bool TryGetPlanarMeshBlockingNormal(
+            Collider collider,
+            Vector3 sweepStart,
+            Vector3 sweepDelta,
+            out Vector3 blockingNormal)
+        {
+            blockingNormal = Vector3.zero;
+            if (!(collider is MeshCollider meshCollider) ||
+                !TryGetZeroThicknessMeshPlane(
+                    meshCollider,
+                    out Vector3 planePoint,
+                    out Vector3 planeNormal))
+                return false;
+
+            // Do not require the sweep to cross the sheet. Sliding along a
+            // ramp never crosses its own plane, yet that is exactly the case
+            // that needs the real slope normal for ClipVelocity.
+            float side = Vector3.Dot(sweepStart - planePoint, planeNormal);
+            if (Mathf.Abs(side) > SourceDistanceEpsilon)
+            {
+                blockingNormal = side > 0f ? planeNormal : -planeNormal;
+                return true;
+            }
+
+            // The hull centre sits on the sheet, so orient the normal
+            // against the crossing direction; either side then works.
+            if (sweepDelta.sqrMagnitude <= 0.000000000001f)
+                return false;
+
+            float directionAcrossPlane =
+                Vector3.Dot(sweepDelta.normalized, planeNormal);
+            if (Mathf.Abs(directionAcrossPlane) <= 0.00001f)
+                return false;
+
+            blockingNormal = directionAcrossPlane > 0f
+                ? -planeNormal
+                : planeNormal;
+            return true;
         }
 
         private void PrepareDuckInput()
