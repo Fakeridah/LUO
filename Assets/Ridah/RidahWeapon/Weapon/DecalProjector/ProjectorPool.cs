@@ -6,7 +6,7 @@ using UnityEngine.Pool;
 
 namespace Ridah.Decal
 {
-    public class ProjectionPool: Printer
+    public class ProjectionPool
     {
         public ObjectPool<DecalContorller> decalPool;
         public DecalContorller decalContorller;
@@ -17,7 +17,7 @@ namespace Ridah.Decal
 
         private DecalContorller CreatDecal()
         {
-            DecalContorller decal = Instantiate(decalContorller);
+            DecalContorller decal = UnityEngine.Object.Instantiate(decalContorller);
             decal.SetPool(decalPool);
             return decal;
         }
@@ -31,7 +31,7 @@ namespace Ridah.Decal
         }
         private void OnDestroyDecal(DecalContorller decal)
         {
-            Destroy(decal.gameObject);
+            UnityEngine.Object.Destroy(decal.gameObject);
         }
     }
 }

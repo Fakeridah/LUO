@@ -58,6 +58,22 @@ namespace RidahFPS.Controllers
         private const float SourceStepEpsilon = 0.03125f * UnitScale;
         private const float CollisionSkin = 0.001f;
         private const float SourceDistanceEpsilon = 0.03125f * UnitScale;
+        // A BoxCast that begins overlapping reports distance 0. Only that is
+        // "startsolid" in Source's CTrace_PlayerAABB_vs_Portals sense, so this
+        // must stay tiny: a proximity tolerance here would also excuse real
+        // geometry standing a few hundredths away.
+        private const float PortalSpaceStartSolidEpsilon = 0.0001f;
+        // How deep a hull has to be buried in a carved portal host before the
+        // periodic stuck recovery calls it stuck. Leaning on the aperture rim
+        // is a normal resting place, and a false positive here aborts the whole
+        // movement command, so this stays well clear of contact noise while
+        // still catching a hull that landed straddling the rim.
+        private const float CarvedHostStuckPenetration = 0.05f;
+        // Largest single depenetration step used to free a hull that Source's
+        // 54-offset probe table cannot reach. Source's table tops out at 6 HU,
+        // which is far too short for a hull buried in a mesh; one full hull
+        // width per step keeps the repair local while still clearing it.
+        private const float MaxStuckDepenetration = 32f * UnitScale;
         private const float SourcePlaneEpsilon = 1.1920929e-7f;
         private const float SourceStaminaRange = 100f;
 
@@ -154,6 +170,8 @@ namespace RidahFPS.Controllers
         private float _lastGroundSurfaceMaxSpeedFactor = 1f;
         private int _stuckOffsetIndex;
         private float _lastStuckCheckTime = -0.05f;
+        private Vector3 _lastShellProbeOrigin;
+        private float _lastShellProbeLogTime = -1f;
         private bool _movementBlockedThisTick;
         private float _simpleBonusSpeed;
         private float _simpleTurnRate;
@@ -1045,16 +1063,22 @@ namespace RidahFPS.Controllers
             for (int i = 0; i < hitCount; i++)
             {
                 RaycastHit candidate = _moveHits[i];
-                if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
-                    Portal.ShouldIgnoreMovementCollision(
-                        candidate,
-                        _lastBoxQueryCenter,
-                        _lastBoxQueryHalfExtents +
-                            Vector3.one * CollisionSkin,
-                        _lastBoxQueryRotation,
-                        _lastBoxQuerySweepDelta,
-                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
-                        _movementUp) ||
+                if (candidate.collider == null ||
+                    candidate.collider == _sourceHullCollider)
+                    continue;
+
+                bool ignoredByPortal = Portal.ShouldIgnoreMovementCollision(
+                    candidate,
+                    _lastBoxQueryCenter,
+                    _lastBoxQueryHalfExtents +
+                        Vector3.one * CollisionSkin,
+                    _lastBoxQueryRotation,
+                    _lastBoxQuerySweepDelta,
+                    GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                    _movementUp);
+                Portal.LogPortalHostContact(
+                    candidate, _lastBoxQueryCenter, ignoredByPortal);
+                if (ignoredByPortal ||
                     (_surfer != null && _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform)))
                     continue;
@@ -1066,10 +1090,52 @@ namespace RidahFPS.Controllers
                 }
             }
 
+            // Source runs CTrace_PlayerAABB_vs_Portals with two gates.
+            //
+            // Gate 1 (1711) - enter the portal branch only when the plain
+            // real-space trace is obstructed:
+            //     RealTrace.startsolid || (ray_local.m_IsSwept && RealTrace.fraction < 1.0f)
+            //
+            // Gate 2 (1850) - the portal trace may never be stricter than that
+            // plain trace:
+            //     RealTrace.startsolid ||
+            //         ( !PortalTrace.startsolid && PortalTrace.fraction >= RealTrace.fraction )
+            // Because the aperture filter can only ever remove hits, the
+            // filtered result is always >= the plain one, so in practice the
+            // plain trace is the floor under the result: a remote hit nearer
+            // than it is discarded.
+            //
+            // Source's trace mask excludes the portal prop, so the plain trace
+            // here has to exclude portal-owned colliders too. Leaving them in
+            // put the portal's own 0.08 UU thick collider - sitting exactly on
+            // the plane - at ~0 distance, which let every remote hit through
+            // gate 2 and is why the previous attempt still pinned the player.
+            float sweepLength = _lastBoxQuerySweepDelta.magnitude;
+            float plainLocalDistance = float.PositiveInfinity;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit raw = _moveHits[i];
+                if (raw.collider == null || raw.collider == _sourceHullCollider)
+                    continue;
+                if (Portal.IsPortalOwnedCollider(raw.collider))
+                    continue;
+                if (_surfer != null && _surfer.MoveData.playerTransform != null &&
+                    raw.collider.transform.IsChildOf(_surfer.MoveData.playerTransform))
+                    continue;
+                if (raw.distance < plainLocalDistance)
+                    plainLocalDistance = raw.distance;
+            }
+
+            bool plainStartSolid =
+                plainLocalDistance <= PortalSpaceStartSolidEpsilon;
+            bool localTraceObstructed = plainStartSolid ||
+                plainLocalDistance < sweepLength;
+
             Transform movingRoot = _surfer != null
                 ? _surfer.MoveData.playerTransform
                 : null;
-            if (Portal.TryGetPortalSpaceCollision(
+            if (localTraceObstructed &&
+                Portal.TryGetPortalSpaceCollision(
                 _lastBoxQueryCenter,
                 _lastBoxQueryHalfExtents,
                 GetQueryHalfExtents(GetBoxHalfExtents(true)),
@@ -1080,7 +1146,9 @@ namespace RidahFPS.Controllers
                 movingRoot,
                 out RaycastHit portalHit,
                 out bool portalRampContact) &&
-                portalHit.distance < nearestDistance)
+                portalHit.distance < nearestDistance &&
+                (plainStartSolid ||
+                 portalHit.distance >= plainLocalDistance))
             {
                 nearest = portalHit;
                 contactedPortalTransitionRamp = portalRampContact;
@@ -1896,16 +1964,21 @@ namespace RidahFPS.Controllers
             {
                 RaycastHit candidate = _moveHits[i];
                 if (candidate.collider == null ||
-                    candidate.collider == _sourceHullCollider ||
-                    Portal.ShouldIgnoreMovementCollision(
-                        candidate,
-                        _lastBoxQueryCenter,
-                        _lastBoxQueryHalfExtents +
-                            Vector3.one * CollisionSkin,
-                        _lastBoxQueryRotation,
-                        _lastBoxQuerySweepDelta,
-                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
-                        _movementUp) ||
+                    candidate.collider == _sourceHullCollider)
+                    continue;
+
+                bool ignoredByPortal = Portal.ShouldIgnoreMovementCollision(
+                    candidate,
+                    _lastBoxQueryCenter,
+                    _lastBoxQueryHalfExtents +
+                        Vector3.one * CollisionSkin,
+                    _lastBoxQueryRotation,
+                    _lastBoxQuerySweepDelta,
+                    GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                    _movementUp);
+                Portal.LogPortalHostContact(
+                    candidate, _lastBoxQueryCenter, ignoredByPortal);
+                if (ignoredByPortal ||
                     (_surfer != null &&
                      _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(
@@ -2607,6 +2680,23 @@ namespace RidahFPS.Controllers
 
         private bool IsHullStuckAt(Vector3 basePosition, Vector3 halfExtents)
         {
+            return IsHullStuckAt(basePosition, halfExtents, out _);
+        }
+
+        /// <summary>
+        /// Same test, but reports which collider held the hull. Diagnostics
+        /// only: a command aborted by the stuck check never reaches
+        /// TryHandlePlayerMovement, so a stuck hull inside a portal aperture
+        /// produces no portal log at all and reads as "the portal silently did
+        /// nothing". Naming the blocker is the only way to tell that apart
+        /// from the crossing being rejected.
+        /// </summary>
+        private bool IsHullStuckAt(
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            out Collider blocker)
+        {
+            blocker = null;
             if (_surfer == null || _surfer.MoveData.playerTransform == null)
                 return false;
 
@@ -2622,18 +2712,31 @@ namespace RidahFPS.Controllers
             {
                 Collider collider = _hullOverlaps[i];
                 if (collider == null || collider == _sourceHullCollider ||
-                    Portal.ShouldIgnoreMovementCollision(
+                    collider.transform.IsChildOf(
+                        _surfer.MoveData.playerTransform))
+                    continue;
+
+                if (Portal.ShouldIgnoreMovementCollision(
                         collider,
                         center,
                         halfExtents,
-                        Quaternion.identity) ||
+                        Quaternion.identity))
+                    continue;
+
+                // Stuck recovery normally ignores portal hosts: a hull resting
+                // on the aperture rim is a normal resting place, and treating
+                // that contact as stuck zeroes the velocity every command.
+                // A carved host is the exception. Its hole is real geometry, so
+                // a hull that actually penetrates it is straddling the rim, and
+                // leaving that invisible meant a hull which drifted into the
+                // rim after a teleport stayed frozen forever.
+                bool carvedHost = Portal.IsCarvedPortalHostCollider(collider);
+                if (!carvedHost &&
                     Portal.ShouldIgnoreStuckRecoveryCollision(
                         collider,
                         center,
                         halfExtents,
-                        Quaternion.identity) ||
-                    collider.transform.IsChildOf(
-                        _surfer.MoveData.playerTransform))
+                        Quaternion.identity))
                     continue;
 
                 // Physics.OverlapBox also reports a collider that merely
@@ -2643,6 +2746,16 @@ namespace RidahFPS.Controllers
                 // wall contact as stuck zeroes the clipped velocity every
                 // command, so the player can only escape by changing hull
                 // size (duck) or teleporting (reset).
+                //
+                // A carved host needs a wider margin than the plain contact
+                // tolerance: leaning on the aperture rim is still a normal
+                // resting place, and only a hull clearly buried in the rim
+                // should be treated as the bad-landing case worth repairing.
+                float stuckTolerance = GetContactPenetrationTolerance(collider);
+                if (carvedHost)
+                    stuckTolerance = Mathf.Max(
+                        stuckTolerance, CarvedHostStuckPenetration);
+
                 if (Physics.ComputePenetration(
                     _sourceHullCollider,
                     basePosition,
@@ -2652,8 +2765,11 @@ namespace RidahFPS.Controllers
                     collider.transform.rotation,
                     out _,
                     out float penetration) &&
-                     penetration > GetContactPenetrationTolerance(collider))
+                     penetration > stuckTolerance)
+                {
+                    blocker = collider;
                     return true;
+                }
             }
 
             return false;
@@ -2671,6 +2787,364 @@ namespace RidahFPS.Controllers
                 CollisionSkin,
                 Mathf.Max(hullContactOffset, other.contactOffset)) +
                 CollisionSkin;
+        }
+
+        // DIAGNOSTIC ONLY. Rate limited so a hull held for a second logs once
+        // instead of once per command.
+        private float _lastStuckBlockLogTime = -1f;
+
+        private void LogStuckBlock(
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            Collider blocker)
+        {
+            float now = Time.unscaledTime;
+            if (now - _lastStuckBlockLogTime < 0.5f)
+                return;
+            _lastStuckBlockLogTime = now;
+
+            Vector3 center = basePosition + _movementUp * halfExtents.y;
+            string extra = string.Empty;
+            Portal hostPortal = Portal.FindPortalHostingCollider(blocker);
+            if (hostPortal != null)
+            {
+                Vector3 normal = Portal.GetPortalPlaneNormal(hostPortal);
+                Vector3 offset = center - hostPortal.transform.position;
+                float distance = Vector3.Dot(offset, normal);
+                extra = " portal=" + hostPortal.name +
+                    " dist=" + distance.ToString("F3") +
+                    " rightOff=" +
+                        Vector3.Dot(offset, hostPortal.transform.right)
+                            .ToString("F3") +
+                    " upOff=" +
+                        Vector3.Dot(offset, hostPortal.transform.up)
+                            .ToString("F3") +
+                    " fitsOpening=" + Portal.IsHullInsidePortalOpening(
+                        hostPortal, center, halfExtents);
+            }
+
+            Debug.Log("[GokzStuck] command blocked at " +
+                basePosition.ToString("F3") +
+                " by " + (blocker != null ? blocker.name : "unknown") +
+                " carvedHost=" +
+                (blocker != null &&
+                 Portal.IsCarvedPortalHostCollider(blocker)) +
+                extra);
+        }
+
+        /// <summary>
+        /// Penetration test against one specific collider, without the
+        /// portal-host exclusion that IsHullStuckAt applies. The post-teleport
+        /// rescue needs it to confirm that sliding the hull into the aperture
+        /// really freed it instead of just moving it sideways.
+        /// </summary>
+        private bool IsHullPenetratingCollider(
+            Collider collider,
+            Vector3 basePosition)
+        {
+            if (collider == null || _sourceHullCollider == null)
+                return false;
+
+            if (!Physics.ComputePenetration(
+                _sourceHullCollider,
+                basePosition,
+                Quaternion.identity,
+                collider,
+                collider.transform.position,
+                collider.transform.rotation,
+                out _,
+                out float penetration))
+                return false;
+
+            return penetration > GetContactPenetrationTolerance(collider);
+        }
+
+        /// <summary>
+        /// Frees a hull that is embedded in a non-convex mesh shell, which is
+        /// the one trap the Source stuck path cannot see.
+        /// </summary>
+        /// <remarks>
+        /// An open mesh - a pipe whose mouth is not capped, a single-sided
+        /// sheet - is a shell of triangles with no volume. Every ordinary query
+        /// ignores its back faces: shape sweeps do by default
+        /// (Physics.queriesHitBackfaces), and Physics.ComputePenetration says so
+        /// explicitly in its own docs. So once the hull straddles the shell, the
+        /// sweeps start overlapped and report distance 0 in every direction,
+        /// while ComputePenetration only measures the front-facing half and
+        /// reports nothing worth repairing. The hull cannot move, never trips
+        /// IsHullStuckAt, and Source's offset table never runs - the player is
+        /// simply frozen.
+        ///
+        /// Measure the embedding with the one query that does see a wall from
+        /// its far side: a ray probe with back-face hits enabled. Six axes are
+        /// enough because a shell that freezes the hull has to cross near its
+        /// centre, and the shortest crossing is the separation to apply.
+        /// </remarks>
+        private bool TryEscapeEmbeddedMeshShell(
+            Vector3 basePosition,
+            Vector3 halfExtents)
+        {
+            if (_surfer == null || _surfer.MoveData.playerTransform == null)
+                return false;
+
+            Vector3 center = basePosition + _movementUp * halfExtents.y;
+            int count = Physics.OverlapBoxNonAlloc(
+                center,
+                GetQueryHalfExtents(halfExtents),
+                _hullOverlaps,
+                Quaternion.identity,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+
+            // This probe runs once per second during normal play, so a report
+            // is only worth a line when the hull has not moved since the last
+            // one: that is the frozen state we are hunting.
+            bool frozen =
+                (basePosition - _lastShellProbeOrigin).sqrMagnitude < 0.000001f;
+            _lastShellProbeOrigin = basePosition;
+            float deepest = 0f;
+            int shells = 0;
+            string firstName = null;
+
+            for (int i = 0; i < count; i++)
+            {
+                Collider collider = _hullOverlaps[i];
+                if (collider == null || collider == _sourceHullCollider)
+                    continue;
+                if (collider.transform.IsChildOf(
+                        _surfer.MoveData.playerTransform))
+                    continue;
+                if (firstName == null)
+                    firstName = collider.name + "(" +
+                        collider.GetType().Name + ")";
+
+                // A convex mesh is measured correctly by ComputePenetration,
+                // so only the non-convex ones have this blind spot.
+                MeshCollider shell = collider as MeshCollider;
+                if (shell == null || shell.convex)
+                    continue;
+                if (Portal.ShouldIgnoreMovementCollision(
+                        collider,
+                        center,
+                        halfExtents,
+                        Quaternion.identity))
+                    continue;
+
+                shells++;
+                Vector3 candidate = basePosition;
+                bool embedded = false;
+                for (int iteration = 0; iteration < 4; iteration++)
+                {
+                    float step = GetShellPenetration(
+                        shell, candidate, halfExtents, out Vector3 push);
+                    if (step <= 0f)
+                        break;
+                    if (step > deepest)
+                        deepest = step;
+                    embedded = true;
+                    candidate += push;
+                }
+
+                if (!embedded)
+                    continue;
+                if ((candidate - basePosition).sqrMagnitude < 0.0000001f)
+                    continue;
+                if (GetShellPenetration(
+                        shell, candidate, halfExtents, out _) > 0f)
+                    continue;
+                if (IsHullStuckAt(candidate, halfExtents))
+                    continue;
+
+                Debug.Log("[GokzMove] freed the hull from the open mesh " +
+                    collider.name + " (" + collider.GetType().Name + ") by " +
+                    (candidate - basePosition).magnitude.ToString("F3") + " UU");
+
+                Transform playerTransform = _surfer.MoveData.playerTransform;
+                playerTransform.position = candidate;
+                _surfer.MoveData.Origin = candidate;
+                Physics.SyncTransforms();
+                _stuckOffsetIndex = 0;
+                return true;
+            }
+
+            // Nothing could be measured, so record what the hull is sitting in.
+            // Without this the frozen case is completely silent: the sweeps
+            // report start-solid, IsHullStuckAt sees no penetration, and no
+            // recovery path ever logs a reason.
+            if (frozen && count > 0 &&
+                _elapsed - _lastShellProbeLogTime > 1f)
+            {
+                _lastShellProbeLogTime = _elapsed;
+                Debug.Log("[GokzMove] hull frozen at " +
+                    basePosition.ToString("F3") + " with " + count +
+                    " overlaps, " + shells + " non-convex mesh(es), deepest " +
+                    deepest.ToString("F3") + " UU; first=" +
+                    (firstName != null ? firstName : "none"));
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// How far the mesh surface reaches inside the hull at the given pose,
+        /// plus the translation that would push it back out.
+        /// </summary>
+        /// <remarks>
+        /// Probed by shooting the six hull axes with back-face hits enabled.
+        /// That is the only query that can see a wall from its far side:
+        /// shape sweeps ignore back faces by default, ComputePenetration says
+        /// so in its own docs, and for a non-convex mesh ClosestPoint answers
+        /// with the query point itself, so none of the three can measure how
+        /// deep a shell reaches inside the hull.
+        /// </remarks>
+        private float GetShellPenetration(
+            MeshCollider shell,
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            out Vector3 push)
+        {
+            push = Vector3.zero;
+
+            Vector3 center = basePosition + _movementUp * halfExtents.y;
+            float tolerance =
+                GetContactPenetrationTolerance(shell) + CollisionSkin;
+            float smallest = float.PositiveInfinity;
+            Vector3 smallestAxis = Vector3.zero;
+
+            bool previousBackfaces = Physics.queriesHitBackfaces;
+            Physics.queriesHitBackfaces = true;
+            try
+            {
+                for (int axis = 0; axis < ShellProbeAxes.Length; axis++)
+                {
+                    Vector3 direction = ShellProbeAxes[axis];
+                    float extent =
+                        Mathf.Abs(direction.x) * halfExtents.x +
+                        Mathf.Abs(direction.y) * halfExtents.y +
+                        Mathf.Abs(direction.z) * halfExtents.z;
+                    Ray ray = new Ray(center, direction);
+                    if (!shell.Raycast(ray, out RaycastHit hit,
+                            extent + tolerance))
+                        continue;
+
+                    float depth = extent - hit.distance;
+                    if (depth <= tolerance || depth >= smallest)
+                        continue;
+
+                    smallest = depth;
+                    smallestAxis = direction;
+                }
+            }
+            finally
+            {
+                Physics.queriesHitBackfaces = previousBackfaces;
+            }
+
+            if (smallestAxis == Vector3.zero)
+                return 0f;
+
+            push = smallestAxis * (smallest + CollisionSkin);
+            return smallest;
+        }
+
+        private static readonly Vector3[] ShellProbeAxes =
+        {
+            Vector3.right, Vector3.left,
+            Vector3.up, Vector3.down,
+            Vector3.forward, Vector3.back
+        };
+
+        /// <summary>
+        /// Frees a hull buried in geometry deeper than Source's probe table can
+        /// reach, using the physics engine's own separation vector.
+        /// </summary>
+        /// <remarks>
+        /// CGameMovement::CheckStuck probes 54 offsets whose largest step is
+        /// 6 HU (0.114 UU). A hull that ends up intersecting a MeshCollider -
+        /// an open pipe mouth, a thin ramp triangle, a prop whose collision is
+        /// a shell - is usually buried much deeper than that, so every probe
+        /// fails, CheckStuck reports "still stuck" forever, and the movement
+        /// command is aborted on every tick: the player is frozen until a
+        /// teleport. ComputePenetration already returns the minimal
+        /// translation that separates the pair, which is exactly what the
+        /// table is approximating with fixed steps.
+        /// </remarks>
+        private bool TryDepenetrateHull(
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            out Vector3 freed,
+            out Collider blocker)
+        {
+            freed = basePosition;
+            blocker = null;
+            if (_sourceHullCollider == null || _surfer == null ||
+                _surfer.MoveData.playerTransform == null)
+                return false;
+
+            Transform playerTransform = _surfer.MoveData.playerTransform;
+            Vector3 position = basePosition;
+            bool moved = false;
+            for (int iteration = 0; iteration < 4; iteration++)
+            {
+                Vector3 center = position + _movementUp * halfExtents.y;
+                int count = Physics.OverlapBoxNonAlloc(
+                    center,
+                    GetQueryHalfExtents(halfExtents),
+                    _hullOverlaps,
+                    Quaternion.identity,
+                    GetCollisionMask(),
+                    QueryTriggerInteraction.Ignore);
+
+                Vector3 push = Vector3.zero;
+                for (int i = 0; i < count; i++)
+                {
+                    Collider collider = _hullOverlaps[i];
+                    if (collider == null || collider == _sourceHullCollider)
+                        continue;
+                    if (collider.transform.IsChildOf(playerTransform))
+                        continue;
+                    if (Portal.ShouldIgnoreMovementCollision(
+                            collider,
+                            center,
+                            halfExtents,
+                            Quaternion.identity))
+                        continue;
+                    if (!Physics.ComputePenetration(
+                            _sourceHullCollider,
+                            position,
+                            Quaternion.identity,
+                            collider,
+                            collider.transform.position,
+                            collider.transform.rotation,
+                            out Vector3 direction,
+                            out float distance))
+                        continue;
+
+                    float tolerance = GetContactPenetrationTolerance(collider);
+                    if (distance <= tolerance)
+                        continue;
+
+                    push += direction * (distance - tolerance + CollisionSkin);
+                    blocker = collider;
+                }
+
+                if (push.sqrMagnitude < 0.0000001f)
+                    break;
+                // Cap one step so a degenerate separation vector cannot fling
+                // the hull across the map; four steps still clear a deep embed.
+                if (push.magnitude > MaxStuckDepenetration)
+                    push = push.normalized * MaxStuckDepenetration;
+                position += push;
+                moved = true;
+            }
+
+            if (!moved)
+                return false;
+            if (IsHullStuckAt(position, halfExtents))
+                return false;
+
+            freed = position;
+            return true;
         }
 
         private void TryWaterCrouchBoost()
@@ -3446,8 +3920,38 @@ namespace RidahFPS.Controllers
             ref Vector3 rootPosition,
             Vector3 halfExtents)
         {
-            if (exitPortal == null ||
-                !IsHullStuckAt(rootPosition, halfExtents))
+            if (exitPortal == null)
+                return false;
+
+            // The landing clamp fits the hull to the exit aperture, but the
+            // position that ends up placed can still straddle the rim: the
+            // exit gate validates the crossing point, while the landing is the
+            // end of the frame, and the two differ by the tangential travel
+            // left in it. A slope exit is almost pure tangential travel, and a
+            // wall exit pressed to one side has the same problem.
+            //
+            // The physics test below cannot see this - stuck recovery
+            // deliberately ignores portal hosts, so a hull resting on the rim
+            // is not zeroed every command - which means a straddling landing
+            // is invisible to it and can never be repaired. Fit the geometry
+            // first, then confirm against the host that it actually freed the
+            // hull before claiming success.
+            Vector3 landingCenter = rootPosition + _movementUp * halfExtents.y;
+            if (Portal.TryFitHullIntoPortalOpening(
+                    exitPortal, landingCenter, halfExtents,
+                    out Vector3 fittedCenter))
+            {
+                Vector3 fittedRoot =
+                    rootPosition + (fittedCenter - landingCenter);
+                if (!IsHullPenetratingCollider(
+                        exitPortal.WallCollider, fittedRoot))
+                {
+                    rootPosition = fittedRoot;
+                    return true;
+                }
+            }
+
+            if (!IsHullStuckAt(rootPosition, halfExtents))
                 return false;
 
             Vector3 center = rootPosition + _movementUp * halfExtents.y;
@@ -3508,11 +4012,26 @@ namespace RidahFPS.Controllers
 
             Transform playerTransform = _surfer.MoveData.playerTransform;
             Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
-            if (!IsHullStuckAt(playerTransform.position, halfExtents))
+            if (!IsHullStuckAt(
+                    playerTransform.position, halfExtents, out Collider blocker))
             {
+                // An open mesh traps the hull without ever tripping the
+                // penetration test above; see TryEscapeEmbeddedMeshShell.
+                if (TryEscapeEmbeddedMeshShell(
+                        playerTransform.position, halfExtents))
+                    return false;
+
                 _stuckOffsetIndex = 0;
                 return false;
             }
+
+            // DIAGNOSTIC ONLY, no behaviour change. Every command that gets
+            // here is aborted before TryHandlePlayerMovement runs, so the
+            // portal is never even asked to fire. Until this line existed that
+            // case produced no log output whatsoever, which is why a hull
+            // stuck inside a portal aperture looked exactly like "the portal
+            // silently did nothing".
+            LogStuckBlock(playerTransform.position, halfExtents, blocker);
 
             // CGameMovement::CheckStuck rate-limits retries to 0.05 seconds,
             // tests exactly one entry from the 54-offset Source table per
@@ -3521,6 +4040,55 @@ namespace RidahFPS.Controllers
                 return true;
 
             _lastStuckCheckTime = _elapsed;
+
+            // A carved portal host is the one stuck case the offset table is
+            // bad at: the hull has to slide into the aperture, which can be a
+            // long way laterally, and Source's few-Hammer-unit probes would
+            // need dozens of attempts to get there. The opening is known, so
+            // fit it directly instead.
+            Vector3 hullCenter =
+                playerTransform.position + _movementUp * halfExtents.y;
+            if (Portal.TryFitHullOutOfCarvedPortalHost(
+                    _sourceHullCollider,
+                    playerTransform.position,
+                    hullCenter,
+                    halfExtents,
+                    out Vector3 fittedCenter))
+            {
+                Vector3 fittedRoot =
+                    playerTransform.position + (fittedCenter - hullCenter);
+                if (!IsHullStuckAt(fittedRoot, halfExtents))
+                {
+                    playerTransform.position = fittedRoot;
+                    _surfer.MoveData.Origin = fittedRoot;
+                    Physics.SyncTransforms();
+                    _stuckOffsetIndex = 0;
+                    return false;
+                }
+            }
+
+            // Source's probe table cannot clear a deep embed: its largest step
+            // is 6 HU, so a hull intersecting a MeshCollider retries every
+            // offset forever and the player stays frozen. Ask the engine for
+            // the separation vector instead, before falling back to the table.
+            if (TryDepenetrateHull(
+                    playerTransform.position,
+                    halfExtents,
+                    out Vector3 freedRoot,
+                    out Collider freedBlocker))
+            {
+                Debug.Log("[GokzStuck] depenetrated the hull by " +
+                    (freedRoot - playerTransform.position).magnitude
+                        .ToString("F3") + " UU out of " +
+                    (freedBlocker != null ? freedBlocker.name : "unknown"));
+
+                playerTransform.position = freedRoot;
+                _surfer.MoveData.Origin = freedRoot;
+                Physics.SyncTransforms();
+                _stuckOffsetIndex = 0;
+                return false;
+            }
+
             Vector3 offsetHu = SourceStuckOffsetsHu[
                 _stuckOffsetIndex++ % SourceStuckOffsetsHu.Length];
             Vector3 candidate = playerTransform.position +

@@ -29,8 +29,25 @@ namespace RidahFPS.Controllers {
 		//The real rotation of the camera without recoil
 		public Vector3 realRotation;
 
+		/// <summary>
+		/// Wraps euler angles into (-180, 180].
+		/// </summary>
+		/// <remarks>
+		/// Quaternion.eulerAngles always reports [0, 360), so a rotation that is
+		/// a hair short of a full turn comes back as 359.99 instead of -0.01.
+		/// Anything that then eases that angle toward zero sweeps the entire
+		/// circle on the way. Every writer that stores an euler decomposition
+		/// into realRotation has to pass through here.
+		/// </remarks>
+		public static Vector3 WrapViewAngles(Vector3 euler)
+		{
+			return new Vector3(
+				Mathf.DeltaAngle(0f, euler.x),
+				Mathf.DeltaAngle(0f, euler.y),
+				Mathf.DeltaAngle(0f, euler.z));
+		}
+
 		private Vector3 portalEyeOffsetWorld;
-		private Vector3 appliedPortalEyeOffsetLocal;
 
 		[Header("Aimpunch")]
 		[Tooltip("bigger number makes the response more damped, smaller is less damped, currently the system will overshoot, with larger damping values it won't")]
@@ -68,6 +85,12 @@ namespace RidahFPS.Controllers {
 				realRotation.x -= 360.0f;
 			}
 
+			// SurfCharacter eases the roll toward zero every frame. A writer
+			// that stored an euler decomposition can leave it on 359.99, and
+			// Lerp(359.99, 0) then spins the view once before settling. Keep it
+			// on the short side, whichever path set it.
+			realRotation.z = Mathf.DeltaAngle(0f, realRotation.z);
+
 			//MiddleMouseScrollScale();
 			// Fix pausing
 			if (Mathf.Abs(Time.timeScale) <= 0)
@@ -89,7 +112,6 @@ namespace RidahFPS.Controllers {
 			realRotation.y += punchAngle.y;
 
 			transform.eulerAngles = realRotation;
-			ApplyPortalEyeOffset();
 		}
 
 		public void SetPortalEyeOffset(Vector3 transformedOldEyePosition,
@@ -98,22 +120,19 @@ namespace RidahFPS.Controllers {
 			portalEyeOffsetWorld = transformedOldEyePosition - newEyePosition;
 		}
 
-		private void ApplyPortalEyeOffset()
-		{
-			Transform parent = transform.parent;
-			Vector3 previousOffsetWorld = parent != null
-				? parent.TransformVector(appliedPortalEyeOffsetLocal)
-				: appliedPortalEyeOffsetLocal;
-			Vector3 unoffsetPosition = transform.position - previousOffsetWorld;
+		/// <summary>
+		/// Portal movement compatibility value. The baseline portal camera reads
+		/// the main camera transform directly and does not apply this offset.
+		/// </summary>
+		public Vector3 PortalEyeOffsetWorld => portalEyeOffsetWorld;
 
-			// CPortal_Player::DecayEyeOffset uses a 0.2 second exponential
-			// decay so the eye does not visibly snap when the player origin is
-			// transformed through a portal.
-			portalEyeOffsetWorld *= Mathf.Exp(-Time.deltaTime / 0.2f);
-			transform.position = unoffsetPosition + portalEyeOffsetWorld;
-			appliedPortalEyeOffsetLocal = parent != null
-				? parent.InverseTransformVector(portalEyeOffsetWorld)
-				: portalEyeOffsetWorld;
+		/// <summary>
+		/// Returns the current camera position for movement code. Portal view
+		/// rendering uses the camera transform directly.
+		/// </summary>
+		public Vector3 GetPortalBaseEyePosition()
+		{
+			return transform.position;
 		}
 
 		public void ViewPunch(Vector2 punchAmount)

@@ -37,7 +37,11 @@ public class FPSManager : Manager
             FPSRoot.SetActive(!FPSRoot.activeInHierarchy);
         }
 
-        if (FPSRoot.activeInHierarchy)
+        // FPSRoot is optional: the prefab used by this project leaves it
+        // unassigned, so the toggle above already guards it. Without the same
+        // guard here every frame throws a NullReferenceException, which floods
+        // the console and hides real errors.
+        if (FPSRoot != null && FPSRoot.activeInHierarchy)
         {
             if (FPSCounter != null)
                 FPSCounter.text = $"FPS: {((1.0f / dt).ToString("F1"))}";
@@ -166,6 +170,14 @@ public class FPSManager : Manager
 
     void UpdateViz(float dt)
     {
+        // The visualizer is optional and this project's FPSManager prefab
+        // leaves visualizerImage / updateShader / drawShader unassigned.
+        // InitVisualizer would then throw from new Material(null) every frame
+        // and flood the console, hiding real errors.
+        if (visualizerImage == null || updateShader == null ||
+            drawShader == null)
+            return;
+
         if (m_VisSampler == null)
             InitVisualizer();
 

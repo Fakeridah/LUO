@@ -1,4 +1,4 @@
-Shader "Portals/PortalMask"
+﻿Shader "Portals/PortalMask"
 {
     Properties
     {
@@ -9,7 +9,7 @@ Shader "Portals/PortalMask"
         Tags
 		{ 
 			"RenderType" = "Opaque" 
-			"Queue" = "Geometry" 
+			"Queue" = "Geometry+1"
 			"RenderPipeline" = "UniversalPipeline"
 		}
 		
@@ -20,14 +20,20 @@ Shader "Portals/PortalMask"
         Pass
         {
 		Name "Mask"
-			// The aperture samples a rendered view directly. A fixed stencil
-			// reference cannot represent Source's per-view masks and clobbers URP.
+			ZTest LEqual
+			ZWrite On
+
+			Stencil
+			{
+				Ref 1
+				Pass replace
+			}
+
 			HLSLPROGRAM
 			#pragma vertex vert
 			#pragma fragment frag
 
 			uniform sampler2D _MainTex;
-			uniform float4 _MainTex_TexelSize;
 			struct appdata
 			{
 				float4 vertex : POSITION;
@@ -49,11 +55,7 @@ Shader "Portals/PortalMask"
 
 			half4 frag(v2f i) : SV_Target
 			{
-			float2 uv = i.screenPos.xy / i.screenPos.w;
-			#if UNITY_UV_STARTS_AT_TOP
-			if (_MainTex_TexelSize.y < 0.0)
-				uv.y = 1.0 - uv.y;
-			#endif
+			float2 uv = i.screenPos.xy/i.screenPos.w;
 			float4 col = tex2D(_MainTex,uv);
 				return col;
 			}

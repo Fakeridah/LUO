@@ -54,24 +54,10 @@ public class PortalPlacement : WeaponController
         bool pairActive = portals.isActiveAndEnabled;
         bool gunActive = portalGun == null || portalGun.activeInHierarchy;
 
-        if (firePrimary && pairActive && gunActive &&
-            portals.Portals[0] != null && portals.Portals[0].placeEabled &&
-            lockShoot)
-        {
-            if (portals.Portals[0].vfx != null)
-                portals.Portals[0].vfx.localScale = 0.01f * Vector3.one;
-            FirePortal(0, mainCamera.transform.position,
-                mainCamera.transform.forward, 250f);
-        }
-        else if (fireSecondary && pairActive && gunActive &&
-            portals.Portals[1] != null && portals.Portals[1].placeEabled &&
-            lockShoot)
-        {
-            if (portals.Portals[1].vfx != null)
-                portals.Portals[1].vfx.localScale = 0.01f * Vector3.one;
-            FirePortal(1, mainCamera.transform.position,
-                mainCamera.transform.forward, 250f);
-        }
+        if (firePrimary)
+            FirePortalFromInput(0, pairActive, gunActive);
+        else if (fireSecondary)
+            FirePortalFromInput(1, pairActive, gunActive);
 
         if (portals.Portals[0] != null && portals.Portals[0].Bullet != null)
             portals.Portals[0].Bullet.SetActive(!portals.Portals[0].isPlaced);
@@ -104,6 +90,53 @@ public class PortalPlacement : WeaponController
                 "PortalSecondary", false);
     }
 
+    /// <summary>
+    /// Every gate between the click and PlacePortal is silent on its own, so a
+    /// swallowed click is indistinguishable from a rejected one. Name the gate
+    /// that stopped it instead.
+    /// </summary>
+    private void FirePortalFromInput(int portalID, bool pairActive,
+        bool gunActive)
+    {
+        Portal portal = portals.Portals[portalID];
+        if (!pairActive)
+        {
+            LogIgnored(portalID, "portal pair is inactive");
+            return;
+        }
+        if (!gunActive)
+        {
+            LogIgnored(portalID, "portal gun is inactive");
+            return;
+        }
+        if (portal == null)
+        {
+            LogIgnored(portalID, "no portal at this index");
+            return;
+        }
+        if (!portal.placeEabled)
+        {
+            LogIgnored(portalID,
+                "player or a teleportable is inside this portal's trigger");
+            return;
+        }
+        if (!lockShoot)
+        {
+            LogIgnored(portalID, "weapon cooldown");
+            return;
+        }
+
+        if (portal.vfx != null)
+            portal.vfx.localScale = 0.01f * Vector3.one;
+        FirePortal(portalID, mainCamera.transform.position,
+            mainCamera.transform.forward, 250f);
+    }
+
+    private static void LogIgnored(int portalID, string reason)
+    {
+        Debug.Log("[PortalPlace] click " + portalID + " ignored: " + reason);
+    }
+
     private void FirePortal(int portalID, Vector3 position, Vector3 direction,
         float distance)
     {
@@ -112,14 +145,39 @@ public class PortalPlacement : WeaponController
             return;
 
         int queryMask = raycastMask.value | portal.PlacementMask.value;
-        RaycastHit hit;
-        if (!Physics.Raycast(position, direction, out hit, distance,
-            queryMask, QueryTriggerInteraction.Ignore))
+        RaycastHit hit = default;
+        bool hitFound;
+        // Probe the authored wall, not the carved collision. A portal hole is
+        // real geometry, so a shot aimed at an existing portal would pass
+        // straight through it and the click would be dropped - that is what
+        // made re-placing a portal take several tries.
+        Portal.BeginPlacementProbe();
+        try
+        {
+            hitFound = Physics.Raycast(position, direction, out hit, distance,
+                queryMask, QueryTriggerInteraction.Ignore);
+        }
+        finally
+        {
+            Portal.EndPlacementProbe();
+        }
+        if (!hitFound)
+        {
+            Debug.Log("[PortalPlace] click " + portalID +
+                " missed: nothing within " + distance.ToString("F0") +
+                " UU along the view ray");
             return;
+        }
 
         int hitLayerMask = 1 << hit.collider.gameObject.layer;
         if ((portal.PlacementMask.value & hitLayerMask) == 0)
+        {
+            Debug.Log("[PortalPlace] click " + portalID +
+                " ignored: " + hit.collider.name + " is on layer '" +
+                LayerMask.LayerToName(hit.collider.gameObject.layer) +
+                "', which the placement mask excludes");
             return;
+        }
 
         Vector3 portalForward = -hit.normal;
         Vector3 portalRight = Vector3.ProjectOnPlane(
@@ -128,7 +186,11 @@ public class PortalPlacement : WeaponController
             portalRight = Vector3.ProjectOnPlane(mainCamera.transform.up,
                 hit.normal);
         if (portalRight.sqrMagnitude < 0.0001f)
+        {
+            LogIgnored(portalID,
+                "the view direction is parallel to the surface normal");
             return;
+        }
 
         portalRight.Normalize();
         Vector3 portalUp = Vector3.Cross(portalForward, portalRight).normalized;

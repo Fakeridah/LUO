@@ -48,7 +48,8 @@ namespace RidahFPS.Controllers
             player.transform.rotation = rotation;
             PlayerAiming aiming = player.GetComponentInChildren<PlayerAiming>();
             if (aiming != null)
-                aiming.realRotation = rotation.eulerAngles;
+                aiming.realRotation = PlayerAiming.WrapViewAngles(
+                    rotation.eulerAngles);
         }
 
         private void OnTeleported(GokzSaveLocation location)

@@ -33,8 +33,8 @@ namespace Ridah.Decal
             {
                 //Initialize collision list
                 collisionEvents = new List<ParticleCollisionEvent>();
+                init();
             }
-            init();
         }
         void Update()
         {
@@ -65,16 +65,29 @@ namespace Ridah.Decal
                         Vector3 normal = collisionEvents[i].normal;
                         Transform surface = other.transform;
 
-                        //Create layermask
-                        int layerMask  = LayerMask.GetMask(new string[] { "Wall", "Default","Gameplay" });
+                        // Use the normal physics query mask so custom layers such as Player
+                        // remain eligible for the follow-up surface raycast.
+                        int layerMask = Physics.DefaultRaycastLayers;
 
-                        //Calculate final position and surface normal
-                        RaycastHit hit;
-                        if (Physics.Raycast(position, -normal, out hit, Mathf.Infinity, layerMask))
+                        // Collision intersections can lie on or slightly inside the collider.
+                        // Start just outside the surface and cast back into it.
+                        Vector3 normalDirection = normal.normalized;
+                        if (normalDirection.sqrMagnitude > 0.0001f)
                         {
-                            position = hit.point;
-                            normal = hit.normal;
-                            surface = hit.collider.transform;
+                            RaycastHit hit;
+                            Vector3 rayOrigin = position + normalDirection * 0.1f;
+                            if (Physics.Raycast(rayOrigin, -normalDirection, out hit, 0.3f, layerMask, QueryTriggerInteraction.Ignore))
+                            {
+                                position = hit.point;
+                                normalDirection = hit.normal;
+                                surface = hit.collider.transform;
+                            }
+                            else
+                            {
+                                // A valid particle collision should still print if the extra
+                                // surface query misses due to contact-point precision.
+                                position += normalDirection * 0.002f;
+                            }
 
                             //Calculate our rotation
                             Vector3 rot;
@@ -83,7 +96,7 @@ namespace Ridah.Decal
                             else rot = Vector3.up;
 
                             //Print
-                            Print(position, Quaternion.LookRotation(-normal, rot), surface, hit.collider.gameObject.layer);
+                            Print(position, Quaternion.LookRotation(-normalDirection, rot), surface, surface.gameObject.layer);
                         }
                     }
                     i++;

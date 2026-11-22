@@ -929,7 +929,8 @@ namespace RidahFPS.Controllers
             if (!teleportAngleFixEnabled || player == null) return;
             player.transform.rotation = rotation;
             PlayerAiming aiming = player.GetComponentInChildren<PlayerAiming>();
-            if (aiming != null) aiming.realRotation = rotation.eulerAngles;
+            if (aiming != null) aiming.realRotation = PlayerAiming.WrapViewAngles(
+                rotation.eulerAngles);
         }
         private void OnTeleported(GokzSaveLocation location) => ApplyTeleportRotation(location.rotation);
 

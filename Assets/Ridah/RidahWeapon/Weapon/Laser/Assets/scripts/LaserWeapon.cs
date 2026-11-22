@@ -34,6 +34,7 @@ namespace Ridah.Weapon
         List<GameObject> laserVFXs;
         private LaserPool laserPool;
         private LaserPool vfxPool;
+        private readonly RaycastHit[] raycastHits = new RaycastHit[64];
         int index = 0;
         Vector3 lastHitPos= Vector3.zero;
         bool lastHitExist = true;
@@ -85,16 +86,25 @@ namespace Ridah.Weapon
         {
             if (Input.GetMouseButton(0) && lockShoot)
             {
-                sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Play();
                 RaycastHit hit;
-                if (Physics.Raycast(cameraTrans.position, cameraTrans.forward, out hit, Mathf.Infinity,layerMask))
+                if (RaycastIgnoringOwner(cameraTrans.position, cameraTrans.forward, out hit))
                 {
                     screenCenterPos = hit.point;
                 }
                 else screenCenterPos = cameraTrans.position + cameraTrans.forward * 100;
-                //if (Vector3.Dot((screenCenterPos - laserstartpoint.position).normalized, cameraTrans.forward) > 0)
-                    laserdirection = (screenCenterPos - laserstartpoint.position).normalized;
-                //else laserdirection = laserstartpoint.forward;
+                Vector3 aimOffset = screenCenterPos - laserstartpoint.position;
+                if (aimOffset.sqrMagnitude > 0.0001f &&
+                    Vector3.Dot(aimOffset, cameraTrans.forward) > 0f)
+                {
+                    laserdirection = aimOffset.normalized;
+                }
+                else
+                {
+                    // The camera's center target can be at or behind the muzzle
+                    // when a surface is extremely close. Keep the beam pointing
+                    // forward instead of producing a zero or backward ray.
+                    laserdirection = laserstartpoint.forward;
+                }
 
                 index = 0;
                 foreach (var item in laserlines)
@@ -146,22 +156,21 @@ namespace Ridah.Weapon
             drCast(dr);
             if (lastHitPos != null && lastHitExist)
             {
-                laserVFXs[index + 1].SetActive(true);
                 laserVFXs[index + 1].transform.position = lastHitPos;
-                sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Play();
+                laserVFXs[index + 1].SetActive(true);
             }
         }
         
         public void drCast(DebugRay dr)
         {
-            laserlines[index].SetActive(true);
             laserlines[index].GetComponent<LineRenderer>().positionCount = 2;
             laserlines[index].GetComponent<LineRenderer>().SetPosition(0, dr.startPos);
-            laserVFXs[index].SetActive(true);
             laserVFXs[index].transform.position = dr.startPos;
+            laserlines[index].SetActive(true);
+            laserVFXs[index].SetActive(true);
             index++;
             RaycastHit hit;
-            if (Physics.Raycast(dr.startPos, dr.dir, out hit, Mathf.Infinity, layerMask))
+            if (RaycastIgnoringOwner(dr.startPos, dr.dir, out hit))
             {
                 //Debug.DrawLine(dr.startPos, hit.point, Color.white);
                 if (hit.transform.CompareTag("Portal") && hit.transform.GetComponent<SimplePortal>())
@@ -185,17 +194,15 @@ namespace Ridah.Weapon
                 {
                     if(hit.transform.GetComponent<LaserManager>())
                     hit.transform.GetComponent<LaserManager>().isEmit = false;
-                    laserVFXs[index].SetActive(true);
                     laserVFXs[index].transform.position = hit.point;
-                    sparkVFX.transform.position = hit.point;
-                    sparkVFX.transform.LookAt(sparkVFX.transform.position + hit.normal);
+                    laserVFXs[index].SetActive(true);
+                    PlaceAndPlayImpactVfx(hit.point, hit.normal);
                 }
                 else
                 {
-                    laserVFXs[index].SetActive(true);
                     laserVFXs[index].transform.position = hit.point;
-                    sparkVFX.transform.position = hit.point;
-                    sparkVFX.transform.LookAt(sparkVFX.transform.position + hit.normal);
+                    laserVFXs[index].SetActive(true);
+                    PlaceAndPlayImpactVfx(hit.point, hit.normal);
                 }
                 if (index - 1 >= 0)
                 {
@@ -207,12 +214,56 @@ namespace Ridah.Weapon
             else
             {
                 //Debug.DrawLine(dr.startPos, dr.startPos + dr.dir * 100, Color.white);
+                Vector3 endPos = dr.startPos + dr.dir * 100;
                 laserlines[index - 1].GetComponent<LineRenderer>().SetPosition(0, dr.startPos);
-                laserlines[index - 1].GetComponent<LineRenderer>().SetPosition(1, dr.startPos + dr.dir * 100);
+                laserlines[index - 1].GetComponent<LineRenderer>().SetPosition(1, endPos);
+                if (index < laserVFXs.Count)
+                {
+                    laserVFXs[index].transform.position = endPos;
+                    laserVFXs[index].SetActive(true);
+                }
                 lastHitExist = false;
                 sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Stop();
             }
             index--;
+        }
+
+        private void PlaceAndPlayImpactVfx(Vector3 position, Vector3 normal)
+        {
+            sparkVFX.transform.position = position;
+            sparkVFX.transform.LookAt(position + normal);
+            sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Play();
+        }
+
+        private bool RaycastIgnoringOwner(Vector3 origin, Vector3 direction, out RaycastHit closestHit)
+        {
+            closestHit = default;
+            Transform ownerRoot = transform.root;
+            int hitCount = Physics.RaycastNonAlloc(
+                origin, direction, raycastHits, Mathf.Infinity, layerMask);
+
+            float closestDistance = Mathf.Infinity;
+            bool foundHit = false;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit candidate = raycastHits[i];
+                Collider collider = candidate.collider;
+                if (collider == null)
+                    continue;
+
+                Transform hitTransform = collider.transform;
+                if (hitTransform == ownerRoot || hitTransform.IsChildOf(ownerRoot))
+                    continue;
+
+                if (candidate.distance < closestDistance)
+                {
+                    closestDistance = candidate.distance;
+                    closestHit = candidate;
+                    foundHit = true;
+                }
+            }
+
+            return foundHit;
         }
     }
 }
