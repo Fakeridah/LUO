@@ -48,12 +48,6 @@ namespace RidahFPS.Controllers {
 		}
 
 		private Vector3 portalEyeOffsetWorld;
-<<<<<<< HEAD
-=======
-		private Camera portalViewCamera;
-		private Vector3 portalViewCameraBaseLocalPosition;
-		public Vector3 PortalEyeOffsetWorld => portalEyeOffsetWorld;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 
 		[Header("Aimpunch")]
 		[Tooltip("bigger number makes the response more damped, smaller is less damped, currently the system will overshoot, with larger damping values it won't")]
@@ -79,11 +73,6 @@ namespace RidahFPS.Controllers {
 			// Lock the mouse
 			Cursor.lockState = CursorLockMode.Locked;
 			Cursor.visible = false;
-		}
-
-		private void Awake()
-		{
-			CachePortalViewCamera();
 		}
 
 		private void Update()
@@ -123,22 +112,14 @@ namespace RidahFPS.Controllers {
 			realRotation.y += punchAngle.y;
 
 			transform.eulerAngles = realRotation;
-<<<<<<< HEAD
-=======
-			// C_Portal_Player::ClientThink also calls Reorient, independently
-			// of the movement-command PostThink path advanced by FixedUpdate.
-			AdvancePortalEyeOffset(Time.deltaTime);
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 		}
 
 		public void SetPortalEyeOffset(Vector3 transformedOldEyePosition,
 			Vector3 newEyePosition)
 		{
 			portalEyeOffsetWorld = transformedOldEyePosition - newEyePosition;
-			ApplyPortalEyeOffsetToCamera();
 		}
 
-<<<<<<< HEAD
 		/// <summary>
 		/// Portal movement compatibility value. The baseline portal camera reads
 		/// the main camera transform directly and does not apply this offset.
@@ -152,57 +133,6 @@ namespace RidahFPS.Controllers {
 		public Vector3 GetPortalBaseEyePosition()
 		{
 			return transform.position;
-=======
-		public Vector3 GetPortalBaseEyePosition()
-		{
-			CachePortalViewCamera();
-			if (portalViewCamera == null)
-				return transform.position;
-
-			Transform cameraParent = portalViewCamera.transform.parent;
-			return cameraParent != null
-				? cameraParent.TransformPoint(portalViewCameraBaseLocalPosition)
-				: portalViewCameraBaseLocalPosition;
-		}
-
-		public void AdvancePortalEyeOffset(float tickInterval)
-		{
-			if (tickInterval <= 0f)
-				return;
-
-			// Source ExponentialDecay(0.2f, frametime) treats 0.2 seconds as
-			// the half-life. ClientThink and movement-command PostThink each
-			// advance it with their own frame interval, as Source does.
-			portalEyeOffsetWorld *= Mathf.Exp(
-				-0.69314718f / 0.2f * tickInterval);
-			ApplyPortalEyeOffsetToCamera();
-		}
-
-		private void CachePortalViewCamera()
-		{
-			if (portalViewCamera != null)
-				return;
-
-			portalViewCamera = GetComponentInChildren<Camera>(true);
-			if (portalViewCamera != null)
-				portalViewCameraBaseLocalPosition =
-					portalViewCamera.transform.localPosition;
-		}
-
-		private void ApplyPortalEyeOffsetToCamera()
-		{
-			CachePortalViewCamera();
-			if (portalViewCamera == null)
-				return;
-
-			Transform cameraTransform = portalViewCamera.transform;
-			Transform parent = cameraTransform.parent;
-			Vector3 localOffset = parent != null
-				? parent.InverseTransformVector(portalEyeOffsetWorld)
-				: portalEyeOffsetWorld;
-			cameraTransform.localPosition =
-				portalViewCameraBaseLocalPosition + localOffset;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 		}
 
 		public void ViewPunch(Vector2 punchAmount)

@@ -102,7 +102,6 @@ public class Portal : MonoBehaviour
     private const float PlayerCutoutDepth = 0.05f;
     private const float PlayerCutoutMargin = 0.35f;
     private const float PlayerCutoutTolerance = 0.02f;
-<<<<<<< HEAD
     // ClampCenterIntoOpening is always followed by a FitsPortalOpening check on
     // the centre it returned, and that check re-derives the offset from the
     // reconstructed point. Clamping exactly onto the boundary therefore lands a
@@ -175,6 +174,20 @@ public class Portal : MonoBehaviour
     // without firing the moment the feet touch it. Zero restores the exact
     // centre test; one makes it a full origin (feet) test.
     private const float SourcePortalCrossReliefFraction = 0.5f;
+
+    // Source tests the hull centre against the *exact* exit plane, so the
+    // point the player is placed at is not already "behind" the portal they
+    // just left, and the portal owns the player for a moment afterwards. Our
+    // centre-plane relief pulls that test plane toward the player, which
+    // turns the pure-transform landing point into an immediate re-crossing
+    // whenever the hull is briefly not moving (a wall exit with ~0 speed,
+    // or a hull momentarily held on the exit rim). Hold the just-exited
+    // portal out of crossing detection until the centre is genuinely back
+    // on the traversable side of it. This is a crossing gate only - it never
+    // moves the player, so the Source-style pure-transform landing stays.
+    private static Portal s_recentExitPortal;
+    private const float SourceExitClearanceMargin = 0.02f;
+
     private const float SourceBlindRecessDepthHu =
         SourcePlayerHalfDepthHu + SourcePortalHalfDepthHu +
         SourcePortalBumpForgivenessHu;
@@ -190,13 +203,6 @@ public class Portal : MonoBehaviour
     private const float PatchFrontInset = 0.004f;
     private const float PatchHoleClearance = 0.04f;
     private const float PatchOuterMargin = 0.12f;
-=======
-    private const float HammerUnitsPerUnityUnit = 52.4934383202f;
-    private const float SourcePortalQuadTestEpsilon =
-        -0.03125f / HammerUnitsPerUnityUnit;
-    private const float SourcePortalQuadMargin =
-        1f / HammerUnitsPerUnityUnit;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 
     public bool activeStart = false;
     public bool isPlaced = false;
@@ -434,9 +440,13 @@ public class Portal : MonoBehaviour
         transform.localScale = initialWorldScale;
         attachmentTransform = null;
         wallCollider = hitWall;
-        // Source places the portal plane exactly on the hit point; there is
-        // no forward/backward epsilon in NewLocation().
-        transform.position = position;
+        // Lift the portal surface a hair off the host wall so the portal quad
+        // and the wall are not coplanar. Without this the two surfaces
+        // z-fight and the portal view flickers against the wall it is stuck
+        // to. This matches the upstream placement (forward * 0.001) and is a
+        // rendering-only nudge: the crossing plane / hull clearance logic
+        // below is untouched.
+        transform.position = position - rotation * Vector3.forward * 0.001f;
         transform.rotation = rotation;
         ApplySourcePortalSize();
 
@@ -3721,6 +3731,40 @@ public class Portal : MonoBehaviour
             float crossRelief = SourcePortalCrossReliefFraction *
                 hullHalfExtents.y *
                 Mathf.Abs(Vector3.Dot(movementUp, normal));
+
+            // Do not immediately re-enter a FLOOR or SLOPE portal we just
+            // came out of. The landing centre sits on that portal's plane,
+            // and the relief above makes "on the plane" read as "behind the
+            // test plane". If the hull is held for a command, the settled-
+            // behind-plane fallback below accepts that stationary landing as
+            // a fresh crossing and fires straight back - a two-portal ping-
+            // pong. Source never sees this because it tests the exact centre
+            // plane; emulate the same effect by ignoring this one portal
+            // until the centre is clearly back on the traversable side.
+            // No position is changed here.
+            //
+            // A WALL portal needs none of this: |up . normal| is zero, so the
+            // relief is zero, the exact centre test already behaves like
+            // Source, and exiting a wall never re-triggers. Skip it entirely.
+            if (candidate == s_recentExitPortal && crossRelief > 0f)
+            {
+                float frontDistance = Vector3.Dot(
+                    currentCenter - candidate.transform.position, normal);
+                if (frontDistance <= crossRelief + SourceExitClearanceMargin)
+                {
+                    if (Time.unscaledTime - _lastCrossingLogTime >= 0.5f)
+                    {
+                        _lastCrossingLogTime = Time.unscaledTime;
+                        Debug.Log("[PortalCross] HOLD recent exit " +
+                            candidate.name + " front=" +
+                            frontDistance.ToString("F3") + " relief=" +
+                            crossRelief.ToString("F3"));
+                    }
+                    continue;
+                }
+                s_recentExitPortal = null;
+            }
+
             float startDistance = Vector3.Dot(
                 previousCenter - candidate.transform.position, normal) -
                 crossRelief;
@@ -3823,58 +3867,30 @@ public class Portal : MonoBehaviour
         if (entryPortal == null || exitPortal == null)
             return false;
 
-        // Land on the exit portal's centre, one hull support distance in front
-        // of its plane. The support distance is what makes the hull sit
-        // entirely on the traversable side: on a wall that is the half-depth,
-        // on a floor the half-height, so the feet end up exactly on the floor
-        // instead of a half-height inside it. Combined with landing dead
-        // centre this needs no fit test at all - the centre of an opening is
-        // inside that opening for any hull that fits it anywhere.
-        Vector3 landingHalfExtents = forceDuck
-            ? duckHullHalfExtents
-            : hullHalfExtents;
-        Vector3 exitNormal = GetPortalPlaneNormal(exitPortal);
-        float landingSupport = ProjectHalfExtent(
-            exitNormal,
-            Vector3.right,
-            Vector3.up,
-            Vector3.forward,
-            landingHalfExtents);
-        // Keep the incoming point's position ACROSS the exit opening. Pinning
-        // the landing to the portal's centre threw that away: every crossing
-        // came out at the same spot regardless of where the player entered,
-        // which on a wall-to-wall pair reads as being stepped sideways. Only
-        // the depth (along the exit normal) is replaced by the support
-        // distance; the two in-plane coordinates are carried through by the
-        // portal transform so the player leaves at the matching spot.
-        Vector3 mappedRoot = MapPortalPoint(
-            entryPortal, exitPortal, currentRootPosition);
-        Vector3 mappedCenter = mappedRoot +
-            movementUp * landingHalfExtents.y;
-        Vector3 exitCenter = exitPortal.transform.position;
-        Vector3 landingOffset = mappedCenter - exitCenter;
-        float mappedDepth = Vector3.Dot(landingOffset, exitNormal);
-        Vector3 landingCenter = exitCenter + landingOffset +
-            exitNormal * (landingSupport - mappedDepth);
-        Vector3 transformedRoot = landingCenter -
-            movementUp * landingHalfExtents.y;
-        // The eye offset is a render-only correction measured against the eye
-        // position the body produces. It must receive exactly the same
-        // translation as the root and nothing else: giving it an extra
-        // placement delta desynchronises the camera from the hull, which
-        // reads as the view flying off on its own.
-        transformedOldEyePosition = MapPortalPoint(
-<<<<<<< HEAD
-                entryPortal, exitPortal, player.GetMovementEyePosition()) +
-            (transformedRoot - mappedRoot);
-        currentRootPosition = transformedRoot;
-=======
-            entryPortal, exitPortal, player.GetMovementEyePosition());
+        // Land at the plain portal-transform position, matching
+        // CPortalGameMovement::HandlePortalling for static portals. Source
+        // transforms the hull centre and then removes the origin-to-centre
+        // offset in the DESTINATION world (vTransformedMoveCenter -
+        // vOriginToCenter); that offset is never rotated by the portal matrix.
+        // Source pushes the exit centre outward along the normal only for
+        // MOBILE portals, so every static portal (floor / wall / slope) keeps
+        // the mapped depth as-is. MapPortalPoint is a rigid transform, so the
+        // incoming in-plane position across the opening is preserved. No
+        // support push, fit test, clamp or exit-side pre-simulation here.
+        Vector3 transformedCenter = MapPortalPoint(
+            entryPortal, exitPortal, currentCenter);
         Vector3 exitCenterOffset = forceDuck
             ? movementUp * duckHullHalfExtents.y
             : centerOffset;
-        currentRootPosition = transformedCenter - exitCenterOffset;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
+        Vector3 transformedRoot = transformedCenter - exitCenterOffset;
+        // The eye offset is a render-only correction: Source transforms the
+        // pre-teleport eye position by the same portal matrix and nothing else.
+        transformedOldEyePosition = MapPortalPoint(
+            entryPortal, exitPortal, player.GetMovementEyePosition());
+        currentRootPosition = transformedRoot;
+        // The exit portal owns the player until the centre has moved clearly
+        // back onto its traversable side (see the crossing gate above).
+        s_recentExitPortal = exitPortal;
 
         // HandlePortalling removes the part of this command's gravity that
         // belongs after the crossing, rotates the pre-exit velocity, then
@@ -3886,6 +3902,22 @@ public class Portal : MonoBehaviour
         velocity -= postPortalGravityVelocity;
         velocity = portalRotation * velocity;
         velocity += postPortalGravityVelocity * 1.008f;
+
+        // CPortalGameMovement "velocity hacks" (portal_gamemovement.cpp:2442):
+        // guarantee a minimum outward speed at a floor / upward-slope exit so
+        // the hull clears the exit plane instead of falling back through it
+        // and re-entering the pair next command. Speed only - no position push.
+        Vector3 exitForward = GetPortalPlaneNormal(exitPortal);
+        if (exitForward.sqrMagnitude > 0.000001f)
+        {
+            exitForward.Normalize();
+            float minimumExitSpeed = GetSourceMinimumExitSpeed(
+                exitPortal, transformedCenter, hullHalfExtents,
+                gravityAcceleration);
+            float forwardSpeed = Vector3.Dot(velocity, exitForward);
+            if (forwardSpeed < minimumExitSpeed)
+                velocity += exitForward * (minimumExitSpeed - forwardSpeed);
+        }
         player.ApplyPortalRotation(portalRotation);
         if (Time.unscaledTime - _lastCrossingLogTime >= 0.5f)
         {
@@ -3895,9 +3927,7 @@ public class Portal : MonoBehaviour
                 " vel=" + velocity.ToString("F2") +
                 " rot=" + portalRotation.eulerAngles.ToString("F1") +
                 " entryRot=" + entryPortal.transform.eulerAngles.ToString("F1") +
-                " exitRot=" + exitPortal.transform.eulerAngles.ToString("F1") +
-                " landSupport=" + landingSupport.ToString("F3") +
-                " half=" + landingHalfExtents.ToString("F3"));
+                " exitRot=" + exitPortal.transform.eulerAngles.ToString("F1"));
         }
         return true;
     }
@@ -4409,6 +4439,80 @@ public class Portal : MonoBehaviour
     }
 
     /// <summary>
+    /// CProp_Portal::GetMinimumExitSpeed (prop_portal_shared.cpp:201-265).
+    /// Source keeps a player from walking straight back into a floor or
+    /// upward-facing exit by guaranteeing a minimum speed along the exit
+    /// portal's forward (outward) axis. Without it the player materialises
+    /// with no outward velocity, falls onto the exit plane next command and
+    /// re-enters, ping-ponging between the pair. This is a VELOCITY fix, not
+    /// a landing-position push; the position stays the plain portal transform.
+    /// </summary>
+    private static float GetSourceMinimumExitSpeed(
+        Portal exitPortal,
+        Vector3 exitCenter,
+        Vector3 playerHalfExtents,
+        float gravityAcceleration)
+    {
+        Vector3 forward = GetPortalPlaneNormal(exitPortal);
+        if (forward.sqrMagnitude < 0.000001f)
+            return 0f;
+        forward.Normalize();
+
+        float floorMinimum =
+            300f / PortalTransformMath.HammerUnitsPerUnityUnit;
+        // Source uses Z as up; Unity uses Y. Portal-plane normal.y maps to
+        // Source normal.z. cos(30deg) is the "on floor" threshold.
+        const float cosPiOverSix = 0.8660254037844386f;
+        bool exitOnFloor = forward.y > cosPiOverSix;
+        if (exitOnFloor)
+            return floorMinimum;
+
+        // Only forward facing up by more than 30 degrees (m_vForward.z > 0.5)
+        // gets the perch computation; plain wall exits get no minimum.
+        if (forward.y <= 0.5f)
+            return 0f;
+
+        float gravity = gravityAcceleration > 0f
+            ? gravityAcceleration
+            : 800f / PortalTransformMath.HammerUnitsPerUnityUnit;
+
+        // prop_portal_shared.cpp:232-258: solve the ballistic minimum speed
+        // that lands the hull on the portal's bottom edge ("perch") instead
+        // of letting the ground be pulled out from under it.
+        Vector3 upward = exitPortal.transform.up;
+        Vector3 perch = exitPortal.transform.position -
+            upward * exitPortal.GetPortalHalfSizeWorld().y;
+        Vector3 testBBoxPoint = exitCenter;
+        testBBoxPoint.y -= playerHalfExtents.y;
+        Vector3 testToPerch = perch - testBBoxPoint;
+        Vector3 right = exitPortal.transform.right;
+        testToPerch -= Vector3.Dot(testToPerch, right) * right;
+
+        float horizontalDistance = Mathf.Sqrt(
+            testToPerch.x * testToPerch.x +
+            testToPerch.z * testToPerch.z);
+        float horizontalForward = Mathf.Sqrt(
+            forward.x * forward.x + forward.z * forward.z);
+        // SolveQuadratic(a, 0, c) with:
+        //   a = forward.y * -2 * (horizontalDistance * horizontalForward
+        //                        - testToPerch.y * forward.y)
+        //   c = horizontalDistance^2 * gravity
+        float a = (forward.y * -2f) *
+            ((horizontalDistance * horizontalForward) -
+             (testToPerch.y * forward.y));
+        float c = horizontalDistance * horizontalDistance * gravity;
+        float disc = -4f * a * c;
+        if (Mathf.Abs(a) < 0.000001f || disc < 0f)
+            return 0f;
+        float rootA = Mathf.Sqrt(disc) / (2f * a);
+        float rootB = -rootA;
+        float maxRoot = Mathf.Max(rootA, rootB);
+        if (maxRoot <= 0f)
+            return 0f;
+        return Mathf.Min(maxRoot, floorMinimum);
+    }
+
+    /// <summary>
     /// Mirrors CPortalGameMovement's per-command portal environment selection:
     /// sweep the movement hull against linked portal planes, apply the
     /// previous-environment back-side exception, then keep the nearest portal
@@ -4449,23 +4553,11 @@ public class Portal : MonoBehaviour
             if (startDistance <= 0f && portal != previousEnvironment)
                 continue;
 
-<<<<<<< HEAD
             // Source's HandlePortalling detection uses TestCollision against
             // the portal quad plus the quad-test epsilon/margin below. It has
             // no extra host-wall passage gate; adding one here drops the
             // environment near the lower/side edges, so the portal-aware
             // trace never runs and the uncarved wall stops the player.
-=======
-            if (!FitsPortalWallPassage(
-                    portal,
-                    previousCenter,
-                    hullHalfExtents,
-                    Quaternion.identity,
-                    sweepDelta,
-                    false))
-                continue;
-
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
             Vector3 portalHalfSize = portal.GetPortalHalfSizeWorld();
             if (endDistance < 0f)
             {
@@ -4525,14 +4617,76 @@ public class Portal : MonoBehaviour
         return nearestPortal;
     }
 
-<<<<<<< HEAD
-=======
+    private static bool ShouldForcePortalCrouch(
+        Portal entry,
+        Vector3 movementUp,
+        Vector3 hullHalfExtents,
+        Vector3 duckHullHalfExtents)
+    {
+        if (entry == null || entry.otherPortal == null ||
+            movementUp.sqrMagnitude < 0.5f)
+            return false;
+
+        Vector3 up = movementUp.normalized;
+        Vector3 transformedUp = GetPortalRotation(entry, entry.otherPortal) * up;
+        if (Mathf.Abs(Vector3.Dot(transformedUp, up)) < 0.8660254f)
+            return true;
+
+        // A rotated exit is not the only reason to duck. An opening shorter
+        // than the standing hull cannot be entered at all: the exit clamp only
+        // slides the centre, so it would park the hull in the middle of the
+        // rim with the top and bottom still buried - a stuck state nothing
+        // recovers from. Ducking is the only way through, so ask for it when
+        // it is exactly the difference between fitting and not.
+        Portal exit = entry.otherPortal;
+        if (duckHullHalfExtents.sqrMagnitude < 0.000001f)
+            return false;
+
+        // Both aperture axes have to be tested, not just the height. A portal
+        // placed while the camera was rolled - surfing, or standing on a slope
+        // that rolls the view - is rolled with it, and a rolled opening is
+        // NARROWER than the hull even when it is taller than it. With a 28
+        // degree roll the standing hull's half-height (0.686) projects onto
+        // the rolled right axis and pushes its apparent half-width from 0.305
+        // to 0.675 UU, past the 0.61 UU opening. Height alone never notices
+        // that, so the exit gate rejected every floor-to-rolled-wall crossing
+        // and the player fell through the floor portal and never arrived.
+        // Crouching shrinks the same projection to 0.596 UU, which fits.
+        Vector3 halfSize = exit.GetPortalHalfSizeWorld();
+        float rightLimit = halfSize.x + PlayerCutoutTolerance;
+        float upLimit = halfSize.y + PlayerCutoutTolerance;
+        if (FitsPortalAxis(exit.transform.right, hullHalfExtents, rightLimit) &&
+            FitsPortalAxis(exit.transform.up, hullHalfExtents, upLimit))
+            return false;
+
+        return FitsPortalAxis(
+                   exit.transform.right, duckHullHalfExtents, rightLimit) &&
+               FitsPortalAxis(
+                   exit.transform.up, duckHullHalfExtents, upLimit);
+    }
+
     /// <summary>
-    /// Mirrors C_Portal_Player::CalcPortalView for the local rendered eye.
+    /// True when the hull's support distance along one portal axis stays
+    /// inside the opening's half-size on that axis.
+    /// </summary>
+    private static bool FitsPortalAxis(
+        Vector3 axis, Vector3 hullHalfExtents, float limit)
+    {
+        return ProjectHalfExtent(
+                axis,
+                Vector3.right,
+                Vector3.up,
+                Vector3.forward,
+                hullHalfExtents) <= limit;
+    }
+
+    /// <summary>
     /// While the eye has crossed but the body render origin has not, the eye
     /// is transformed through the portal only when their segment intersects
     /// the aperture. After a body teleport, the recorded portal environment
     /// supplies Source's fallback for an eye that remains behind that plane.
+    /// Restored from the known-good f5eaa77 RT renderer, which needs this to
+    /// compute the correct main-camera eye pose before rendering portal views.
     /// </summary>
     public static bool TryGetPortalViewPose(
         PortablePlayer player,
@@ -4614,70 +4768,6 @@ public class Portal : MonoBehaviour
         Portal exit = entry.otherPortal;
         viewPosition = MapPortalPoint(entry, exit, eyePosition);
         viewRotation = GetPortalRotation(entry, exit) * eyeRotation;
-    }
-
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
-    private static bool ShouldForcePortalCrouch(
-        Portal entry,
-        Vector3 movementUp,
-        Vector3 hullHalfExtents,
-        Vector3 duckHullHalfExtents)
-    {
-        if (entry == null || entry.otherPortal == null ||
-            movementUp.sqrMagnitude < 0.5f)
-            return false;
-
-        Vector3 up = movementUp.normalized;
-        Vector3 transformedUp = GetPortalRotation(entry, entry.otherPortal) * up;
-        if (Mathf.Abs(Vector3.Dot(transformedUp, up)) < 0.8660254f)
-            return true;
-
-        // A rotated exit is not the only reason to duck. An opening shorter
-        // than the standing hull cannot be entered at all: the exit clamp only
-        // slides the centre, so it would park the hull in the middle of the
-        // rim with the top and bottom still buried - a stuck state nothing
-        // recovers from. Ducking is the only way through, so ask for it when
-        // it is exactly the difference between fitting and not.
-        Portal exit = entry.otherPortal;
-        if (duckHullHalfExtents.sqrMagnitude < 0.000001f)
-            return false;
-
-        // Both aperture axes have to be tested, not just the height. A portal
-        // placed while the camera was rolled - surfing, or standing on a slope
-        // that rolls the view - is rolled with it, and a rolled opening is
-        // NARROWER than the hull even when it is taller than it. With a 28
-        // degree roll the standing hull's half-height (0.686) projects onto
-        // the rolled right axis and pushes its apparent half-width from 0.305
-        // to 0.675 UU, past the 0.61 UU opening. Height alone never notices
-        // that, so the exit gate rejected every floor-to-rolled-wall crossing
-        // and the player fell through the floor portal and never arrived.
-        // Crouching shrinks the same projection to 0.596 UU, which fits.
-        Vector3 halfSize = exit.GetPortalHalfSizeWorld();
-        float rightLimit = halfSize.x + PlayerCutoutTolerance;
-        float upLimit = halfSize.y + PlayerCutoutTolerance;
-        if (FitsPortalAxis(exit.transform.right, hullHalfExtents, rightLimit) &&
-            FitsPortalAxis(exit.transform.up, hullHalfExtents, upLimit))
-            return false;
-
-        return FitsPortalAxis(
-                   exit.transform.right, duckHullHalfExtents, rightLimit) &&
-               FitsPortalAxis(
-                   exit.transform.up, duckHullHalfExtents, upLimit);
-    }
-
-    /// <summary>
-    /// True when the hull's support distance along one portal axis stays
-    /// inside the opening's half-size on that axis.
-    /// </summary>
-    private static bool FitsPortalAxis(
-        Vector3 axis, Vector3 hullHalfExtents, float limit)
-    {
-        return ProjectHalfExtent(
-                axis,
-                Vector3.right,
-                Vector3.up,
-                Vector3.forward,
-                hullHalfExtents) <= limit;
     }
 
     private static Vector3 MapPortalPoint(

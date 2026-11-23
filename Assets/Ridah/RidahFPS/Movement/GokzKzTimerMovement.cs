@@ -13,33 +13,6 @@ namespace RidahFPS.Controllers
     /// </summary>
     public sealed class SourceMovementCore
     {
-        private enum SourcePlaneType
-        {
-            X = 0,
-            Y = 1,
-            Z = 2,
-            AnyX = 3,
-            AnyY = 4,
-            AnyZ = 5
-        }
-
-        private struct SourceTraceResult
-        {
-            public bool hit;
-            public bool startSolid;
-            public bool allSolid;
-            public float fraction;
-            public float fractionLeftSolid;
-            public Vector3 endPosition;
-            public Vector3 planeNormal;
-            public SourcePlaneType planeType;
-            public Collider hitCollider;
-            public GokzSourceContents contents;
-            public GokzSourceSurfaceData surface;
-            public bool contactedPortalRamp;
-            public RaycastHit unityHit;
-        }
-
         public const int TickRate = 128;
         public const float TickInterval = 1f / TickRate;
         public const float HammerUnitsPerUnityUnit = 52.4934383202f;
@@ -83,8 +56,8 @@ namespace RidahFPS.Controllers
         private const float HullRadius = 16f * UnitScale;
         private const float StepHeight = 18f * UnitScale;
         private const float SourceStepEpsilon = 0.03125f * UnitScale;
+        private const float CollisionSkin = 0.001f;
         private const float SourceDistanceEpsilon = 0.03125f * UnitScale;
-<<<<<<< HEAD
         // A BoxCast that begins overlapping reports distance 0. Only that is
         // "startsolid" in Source's CTrace_PlayerAABB_vs_Portals sense, so this
         // must stay tiny: a proximity tolerance here would also excuse real
@@ -101,26 +74,8 @@ namespace RidahFPS.Controllers
         // which is far too short for a hull buried in a mesh; one full hull
         // width per step keeps the repair local while still clearing it.
         private const float MaxStuckDepenetration = 32f * UnitScale;
-=======
-        private const float CollisionSkin = SourceDistanceEpsilon;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
         private const float SourcePlaneEpsilon = 1.1920929e-7f;
         private const float SourceStaminaRange = 100f;
-        private const GokzSourceContents PlayerSolidContents =
-            GokzSourceContents.Solid |
-            GokzSourceContents.Moveable |
-            GokzSourceContents.PlayerClip |
-            GokzSourceContents.Window |
-            GokzSourceContents.Monster |
-            GokzSourceContents.Grate;
-        private const GokzSourceContents PlayerSolidBrushContents =
-            GokzSourceContents.Solid |
-            GokzSourceContents.Moveable |
-            GokzSourceContents.PlayerClip |
-            GokzSourceContents.Window |
-            GokzSourceContents.Grate;
-        private const GokzSourceContents LadderTraceContents =
-            PlayerSolidContents & ~GokzSourceContents.PlayerClip;
 
         // CS:GO's continuous duck state. GOKZ does not replace Source's duck
         // animation; it only prevents the engine's duck-spam slowdown from
@@ -236,8 +191,8 @@ namespace RidahFPS.Controllers
         private Vector3 _sampledGroundPosition;
         private Vector3 _sampledGroundVelocity;
         private bool _hasGroundTransformSample;
-        private Collider[] _hullOverlaps = new Collider[32];
-        private Collider[] _sourceVolumeOverlaps = new Collider[64];
+        private readonly Collider[] _hullOverlaps = new Collider[32];
+        private readonly Collider[] _sourceVolumeOverlaps = new Collider[64];
         private readonly HashSet<GokzMovementVolume> _sourceVolumesThisTick =
             new HashSet<GokzMovementVolume>();
         private readonly HashSet<GokzMovementVolume> _consumedSourcePushVolumes =
@@ -247,8 +202,6 @@ namespace RidahFPS.Controllers
         private Vector3 _lastBoxQueryHalfExtents;
         private Quaternion _lastBoxQueryRotation = Quaternion.identity;
         private Vector3 _lastBoxQuerySweepDelta;
-        private GokzSourceContents _lastSourceContentsMask =
-            PlayerSolidContents;
         private BoxCollider _sourceHullCollider;
         private Transform _sourceHullTransform;
         private Rigidbody _sourceRigidbody;
@@ -559,44 +512,43 @@ namespace RidahFPS.Controllers
                     }
                 }
 
+                float distance = velocity.magnitude * timeLeft;
+                Vector3 direction = velocity / velocity.magnitude;
+                int hitCount = SweepBox(position, halfExtents, direction, distance);
+                RaycastHit nearest;
+                bool hit = TryGetNearestHit(
+                    hitCount, out nearest, out bool contactedPortalRamp);
                 Vector3 endPosition = position + velocity * timeLeft;
-                SourceTraceResult trace = TracePlayerBBox(
-                    position,
-                    endPosition,
-                    halfExtents);
-                bool hit = trace.hit;
-                RaycastHit nearest = trace.unityHit;
-                bool contactedPortalRamp = trace.contactedPortalRamp;
-                // Source applies the recovered plane to the retrace before
-                // validating the trace and before it advances/reset flags.
-                bool useRecoveredRampPlane = stuckOnRamp && hasValidPlane;
-                if (useRecoveredRampPlane)
-                {
-                    trace.planeNormal = validPlane.normalized;
-                    trace.planeType = GetSourcePlaneType(trace.planeNormal);
-                }
-                Vector3 tracePlaneNormal = trace.planeNormal;
-                float fraction = trace.fraction;
-                Vector3 traceEndPosition = trace.endPosition;
-
-                if (trace.allSolid)
-                {
-                    // CGameMovement::TryPlayerMove stops immediately when
-                    // TracePlayerBBox reports allsolid.
-                    velocity = Vector3.zero;
-                    finalVelocity = velocity;
-                    return;
-                }
+                // Unity casts use a slightly inset hull. Their contact point
+                // is therefore one skin farther along the path than the
+                // equivalent full Source hull trace. Convert back to Source's
+                // full-hull travel distance before advancing or clipping.
+                float safeDistance = hit
+                    ? Mathf.Clamp(
+                        nearest.distance - CollisionSkin,
+                        0f,
+                        distance)
+                    : distance;
+                float fraction = distance > 0f
+                    ? safeDistance / distance
+                    : 0f;
+                Vector3 traceEndPosition = hit
+                    ? position + direction * safeDistance
+                    : endPosition;
 
                 // gokz-momsurffix treats a later invalid airborne trace as a
                 // ramp precision failure. It retries from a nudged origin and
                 // may reconstruct a valid plane from 27 nearby hull traces.
-                if (bump > 0 && !Grounded &&
+                if (bump > 0 && !Grounded && hit &&
                     !IsValidMovementTrace(
+                        position,
                         halfExtents,
-                        trace))
+                        nearest,
+                        traceEndPosition,
+                        fraction,
+                        contactedPortalRamp))
                 {
-                    lastTracePlane = tracePlaneNormal.normalized;
+                    lastTracePlane = nearest.normal.normalized;
                     hasValidPlane = false;
                     stuckOnRamp = true;
                     continue;
@@ -646,11 +598,7 @@ namespace RidahFPS.Controllers
                 }
 
                 allFraction += fraction;
-                // gokz-momsurffix replaces the retrace plane with the
-                // reconstructed ramp plane after nudging the origin. Keep
-                // PhysX's hit distance/end position, but clip against that
-                // same recovered plane instead of the raw triangle normal.
-                Vector3 planeNormal = tracePlaneNormal;
+                Vector3 planeNormal = nearest.normal.normalized;
                 if (Mathf.Abs(Vector3.Dot(planeNormal, _movementUp)) <
                     0.0001f)
                 {
@@ -761,18 +709,27 @@ namespace RidahFPS.Controllers
         }
 
         private bool IsValidMovementTrace(
+            Vector3 startPosition,
             Vector3 halfExtents,
-            SourceTraceResult trace)
+            RaycastHit hit,
+            Vector3 traceEndPosition,
+            float fraction,
+            bool contactedPortalRamp)
         {
-            if (trace.allSolid || trace.startSolid)
+            if (IsHullStuckAt(startPosition, halfExtents))
                 return false;
 
-            Vector3 normal = trace.planeNormal.normalized;
+            Vector3 normal = hit.normal.normalized;
             float vertical = Vector3.Dot(normal, _movementUp);
-            if (trace.fraction <= SourcePlaneEpsilon &&
-                trace.planeType >= SourcePlaneType.Z &&
+            bool axisAlignedSidePlane =
+                Mathf.Abs(vertical) <= SourcePlaneEpsilon &&
+                (Mathf.Abs(Mathf.Abs(normal.x) - 1f) <= SourcePlaneEpsilon ||
+                 Mathf.Abs(Mathf.Abs(normal.z) - 1f) <= SourcePlaneEpsilon);
+            bool sourcePlaneTypeAtLeastZ = !axisAlignedSidePlane;
+            if (fraction <= SourcePlaneEpsilon &&
+                sourcePlaneTypeAtLeastZ &&
                 vertical < WalkableNormal &&
-                !(trace.contactedPortalRamp && vertical > 0f))
+                !(contactedPortalRamp && vertical > 0f))
                 return false;
 
             // gokz-momsurffix::IsValidMovementTrace also performs a stationary
@@ -780,7 +737,7 @@ namespace RidahFPS.Controllers
             // incomplete stationary trace. This catches an endpoint that a
             // swept trace reports as valid even though it leaves the hull
             // embedded in a ramp triangle.
-            return !IsHullStuckAt(trace.endPosition, halfExtents);
+            return !IsHullStuckAt(traceEndPosition, halfExtents);
         }
 
         private bool TryFindValidRampPlane(
@@ -828,15 +785,25 @@ namespace RidahFPS.Controllers
                     Mathf.Max(0.0001f, halfExtents.z + halfDelta.z));
                 Vector3 traceStart = originalCenter + offset + centerShift;
                 Vector3 traceEnd = originalEndCenter - offset + centerShift;
-                SourceTraceResult rampTrace = TraceBoxByCenter(
-                    traceStart,
-                    traceEnd,
-                    queryHalfExtents);
-                if (!rampTrace.hit || rampTrace.startSolid ||
-                    rampTrace.fraction <= 0f || rampTrace.fraction >= 1f)
+                Vector3 delta = traceEnd - traceStart;
+                float distance = delta.magnitude;
+                if (distance <= CollisionSkin)
                     continue;
 
-                normalSum += rampTrace.planeNormal;
+                int hitCount = BoxCastNonAlloc(
+                    traceStart,
+                    queryHalfExtents,
+                    delta / distance,
+                    Quaternion.identity,
+                    distance,
+                    GetCollisionMask(),
+                    QueryTriggerInteraction.Ignore);
+                if (!TryGetNearestHit(hitCount, out RaycastHit hit) ||
+                    hit.distance <= 0f || hit.distance >= distance ||
+                    IsHullStuckAt(startPosition, halfExtents))
+                    continue;
+
+                normalSum += hit.normal.normalized;
                 validPlanes++;
             }
 
@@ -916,26 +883,18 @@ namespace RidahFPS.Controllers
             // Raise the hull. If the full step is blocked, this is not a
             // stair and the ordinary clipped path remains authoritative. A
             // partial trace is still a valid Source headroom result.
+            RaycastHit upHit;
             float stepTraceDistance = StepHeight + SourceStepEpsilon;
-            SourceTraceResult upTrace = TracePlayerBBox(
+            int upHitCount = SweepBox(
                 startPosition,
-                startPosition + _movementUp * stepTraceDistance,
-                halfExtents);
+                halfExtents,
+                _movementUp,
+                stepTraceDistance);
             Vector3 raisedPosition;
-            if (upTrace.allSolid)
-            {
-                return false;
-            }
-            if (upTrace.startSolid)
-            {
-                // Source StepMove only adopts the upward trace endpoint when
-                // the trace begins outside solid geometry.
-                raisedPosition = startPosition;
-            }
-            else if (upTrace.hit)
+            if (TryGetNearestHit(upHitCount, out upHit))
             {
                 if (Portal.IsPairedPortalWallContact(
-                    upTrace.unityHit,
+                    upHit,
                     _lastBoxQueryCenter,
                     _lastBoxQueryHalfExtents +
                         Vector3.one * CollisionSkin,
@@ -945,10 +904,9 @@ namespace RidahFPS.Controllers
 
                 float availableRise = Mathf.Max(
                     0f,
-                    Mathf.Min(stepTraceDistance,
-                        Vector3.Dot(
-                            upTrace.endPosition - startPosition,
-                            _movementUp)));
+                    Mathf.Min(
+                        stepTraceDistance,
+                        upHit.distance - CollisionSkin));
                 if (availableRise <= CollisionSkin)
                     return false;
                 raisedPosition = startPosition + _movementUp * availableRise;
@@ -977,18 +935,20 @@ namespace RidahFPS.Controllers
 
             // StepMove lowers the raised path back onto the walkable surface.
             // A missing/steep hit means Source restores the ordinary path.
-            SourceTraceResult downTrace = TracePlayerBBox(
+            RaycastHit downHit;
+            int downHitCount = SweepBox(
                 upPosition,
-                upPosition - _movementUp * stepTraceDistance,
-                halfExtents);
+                halfExtents,
+                -_movementUp,
+                stepTraceDistance);
             // Source checks trace.plane.normal[2] before accepting the
             // stepped path.  An empty trace has a zero/default plane normal,
             // so a missing lower hit must restore the ordinary path instead
             // of leaving the player in the air at the full step distance.
-            bool downHitFound = downTrace.hit;
-            RaycastHit downHit = downTrace.unityHit;
+            bool downHitFound = TryGetNearestHit(
+                downHitCount, out downHit, out bool downHitPortalRamp);
             float downNormal = downHitFound
-                ? Vector3.Dot(downTrace.planeNormal, _movementUp)
+                ? Vector3.Dot(downHit.normal, _movementUp)
                 : 0f;
             if (!downHitFound ||
                 Portal.IsPairedPortalWallContact(
@@ -999,10 +959,15 @@ namespace RidahFPS.Controllers
                     _lastBoxQueryRotation,
                     _lastBoxQuerySweepDelta) ||
                 (downNormal < WalkableNormal &&
-                 !(downTrace.contactedPortalRamp && downNormal > 0f)))
+                 !(downHitPortalRamp && downNormal > 0f)))
                 return false;
 
-            Vector3 steppedPosition = downTrace.endPosition;
+            float safeDownDistance = Mathf.Clamp(
+                downHit.distance - CollisionSkin,
+                0f,
+                stepTraceDistance);
+            Vector3 steppedPosition = upPosition -
+                _movementUp * safeDownDistance;
 
             Vector3 downPlanar = Vector3.ProjectOnPlane(
                 downPosition - startPosition,
@@ -1025,32 +990,22 @@ namespace RidahFPS.Controllers
             return true;
         }
 
-        private int OverlapBoxNonAlloc(
-            Vector3 center,
+        private int SweepBox(
+            Vector3 position,
             Vector3 halfExtents,
-            ref Collider[] results,
-            Quaternion orientation,
-            int layerMask,
-            QueryTriggerInteraction queryTriggerInteraction)
+            Vector3 direction,
+            float distance)
         {
-            while (true)
-            {
-                int overlapCount = Physics.OverlapBoxNonAlloc(
-                    center,
-                    halfExtents,
-                    results,
-                    orientation,
-                    layerMask,
-                    queryTriggerInteraction);
-                if (overlapCount < results.Length)
-                    return overlapCount;
-
-                // A truncated overlap list can make a Source startsolid or
-                // CanUnduck trace miss the actual blocking entity. Grow and
-                // repeat so the result does not depend on nearby collider
-                // count or PhysX's unspecified overlap ordering.
-                System.Array.Resize(ref results, results.Length * 2);
-            }
+            Vector3 queryHalfExtents = GetQueryHalfExtents(halfExtents);
+            Vector3 center = position + _movementUp * halfExtents.y;
+            return BoxCastNonAlloc(
+                center,
+                queryHalfExtents,
+                direction,
+                Quaternion.identity,
+                distance,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
         }
 
         private int BoxCastNonAlloc(
@@ -1060,8 +1015,7 @@ namespace RidahFPS.Controllers
             Quaternion orientation,
             float distance,
             int layerMask,
-            QueryTriggerInteraction queryTriggerInteraction,
-            GokzSourceContents sourceContentsMask = PlayerSolidContents)
+            QueryTriggerInteraction queryTriggerInteraction)
         {
             _lastBoxQueryCenter = center;
             _lastBoxQueryHalfExtents = halfExtents;
@@ -1069,7 +1023,6 @@ namespace RidahFPS.Controllers
             _lastBoxQuerySweepDelta = direction.sqrMagnitude > 0.000001f
                 ? direction.normalized * distance
                 : Vector3.zero;
-            _lastSourceContentsMask = sourceContentsMask;
 
             while (true)
             {
@@ -1083,13 +1036,7 @@ namespace RidahFPS.Controllers
                     layerMask,
                     queryTriggerInteraction);
                 if (hitCount < _moveHits.Length)
-                {
-                    if (queryTriggerInteraction == QueryTriggerInteraction.Ignore)
-                        return FilterSourceMovementHits(
-                            hitCount,
-                            sourceContentsMask);
                     return hitCount;
-                }
 
                 // A Source hull trace returns the closest blocking trace. A
                 // full Unity NonAlloc buffer can omit the nearest collider, so
@@ -1097,407 +1044,6 @@ namespace RidahFPS.Controllers
                 // movement result in dense corners.
                 System.Array.Resize(ref _moveHits, _moveHits.Length * 2);
             }
-        }
-
-        private SourceTraceResult TracePlayerBBox(
-            Vector3 startPosition,
-            Vector3 endPosition,
-            Vector3 halfExtents,
-            GokzSourceContents sourceContentsMask = PlayerSolidContents)
-        {
-            Vector3 centerOffset = _movementUp * halfExtents.y;
-            SourceTraceResult trace = TraceBoxByCenter(
-                startPosition + centerOffset,
-                endPosition + centerOffset,
-                halfExtents,
-                sourceContentsMask);
-            trace.endPosition -= centerOffset;
-            return trace;
-        }
-
-        private SourceTraceResult TraceBoxByCenter(
-            Vector3 startCenter,
-            Vector3 endCenter,
-            Vector3 halfExtents,
-            GokzSourceContents sourceContentsMask = PlayerSolidContents)
-        {
-            Vector3 displacement = endCenter - startCenter;
-            float distance = displacement.magnitude;
-            SourceTraceResult trace = new SourceTraceResult
-            {
-                fraction = 1f,
-                endPosition = endCenter,
-                planeType = SourcePlaneType.Z
-            };
-
-            trace.startSolid = IsBoxStuckAtCenter(
-                startCenter,
-                halfExtents,
-                sourceContentsMask);
-            float castStartFraction = 0f;
-            if (trace.startSolid)
-            {
-                if (!TryFindTraceExitFraction(
-                        startCenter,
-                        displacement,
-                        halfExtents,
-                        sourceContentsMask,
-                        out trace.fractionLeftSolid))
-                {
-                    trace.allSolid = true;
-                    trace.fraction = 0f;
-                    trace.endPosition = startCenter;
-                    return trace;
-                }
-
-                castStartFraction = Mathf.Min(
-                    1f,
-                    trace.fractionLeftSolid +
-                        SourceDistanceEpsilon / Mathf.Max(distance, SourceDistanceEpsilon));
-            }
-
-            // DIST_EPSILON is a trace separation tolerance, not a minimum
-            // movement distance. Skipping short sweeps lets repeated low-speed
-            // commands advance through a thin BoxCollider until the next trace
-            // begins solid and reports allsolid. Only omit a true zero-length
-            // sweep (or one below float precision).
-            if (distance <= 0.000001f || castStartFraction >= 1f)
-            {
-                trace.fraction = 1f;
-                trace.endPosition = endCenter;
-                return trace;
-            }
-
-            Vector3 direction = displacement / distance;
-            Vector3 castStart = startCenter +
-                displacement * castStartFraction;
-            float castDistance = distance * (1f - castStartFraction);
-            int hitCount = BoxCastNonAlloc(
-                castStart,
-                GetQueryHalfExtents(halfExtents),
-                direction,
-                Quaternion.identity,
-                castDistance,
-                GetCollisionMask(),
-                QueryTriggerInteraction.Ignore,
-                sourceContentsMask);
-
-            if (!TryGetNearestHit(
-                    hitCount,
-                    out RaycastHit hit,
-                    out trace.contactedPortalRamp))
-                return trace;
-
-            trace.hit = true;
-            trace.unityHit = hit;
-            trace.hitCollider = hit.collider;
-            trace.planeNormal = TryGetPlanarMeshBlockingNormal(
-                    hit.collider,
-                    castStart,
-                    direction,
-                    out Vector3 planarMeshNormal)
-                ? planarMeshNormal
-                : hit.normal.normalized;
-            trace.planeType = GetSourcePlaneType(trace.planeNormal);
-            GokzSourceCollisionData collisionData =
-                GokzSurfaceProperties.ResolveCollisionData(hit.collider);
-            trace.contents = collisionData.contents;
-            trace.surface = GokzSurfaceProperties.Resolve(hit.collider);
-
-            // Unity's BoxCast query hull is inset by CollisionSkin on each
-            // axis. Convert its hit distance back to the full Source hull.
-            // The center travels farther than one skin on oblique impacts:
-            // the inset support distance is skin * |normal|_1, projected
-            // onto the sweep direction. Subtracting a fixed skin lets the
-            // full hull advance into ordinary BoxColliders at shallow angles;
-            // the next trace then misclassifies that overlap as allsolid.
-            Vector3 hitNormal = trace.planeNormal;
-            float normalTravel = Mathf.Abs(Vector3.Dot(hitNormal, direction));
-            float skinCorrection = normalTravel > 0.000001f
-                ? CollisionSkin * (Mathf.Abs(hitNormal.x) +
-                    Mathf.Abs(hitNormal.y) + Mathf.Abs(hitNormal.z)) /
-                    normalTravel
-                : castDistance;
-            float safeDistance = Mathf.Clamp(
-                hit.distance - skinCorrection,
-                0f,
-                castDistance);
-            trace.fraction = castStartFraction +
-                (1f - castStartFraction) * safeDistance / castDistance;
-            trace.endPosition = startCenter +
-                displacement * trace.fraction;
-            return trace;
-        }
-
-        private bool TryFindTraceExitFraction(
-            Vector3 startCenter,
-            Vector3 displacement,
-            Vector3 halfExtents,
-            GokzSourceContents sourceContentsMask,
-            out float fractionLeftSolid)
-        {
-            fractionLeftSolid = 0f;
-            float previousSolidFraction = 0f;
-            const int exitSamples = 32;
-
-            for (int sample = 1; sample <= exitSamples; sample++)
-            {
-                float fraction = sample / (float)exitSamples;
-                Vector3 samplePosition = startCenter +
-                    displacement * fraction;
-                if (IsBoxStuckAtCenter(
-                        samplePosition,
-                        halfExtents,
-                        sourceContentsMask))
-                {
-                    previousSolidFraction = fraction;
-                    continue;
-                }
-
-                float low = previousSolidFraction;
-                float high = fraction;
-                for (int iteration = 0; iteration < 10; iteration++)
-                {
-                    float middle = (low + high) * 0.5f;
-                    Vector3 middlePosition = startCenter +
-                        displacement * middle;
-                    if (IsBoxStuckAtCenter(
-                            middlePosition,
-                            halfExtents,
-                            sourceContentsMask))
-                        low = middle;
-                    else
-                        high = middle;
-                }
-
-                fractionLeftSolid = high;
-                return true;
-            }
-
-            return false;
-        }
-
-        private SourcePlaneType GetSourcePlaneType(Vector3 unityNormal)
-        {
-            Vector3 normal = unityNormal.normalized;
-            float sourceX = Mathf.Abs(normal.x);
-            float sourceY = Mathf.Abs(normal.z);
-            float sourceZ = Mathf.Abs(Vector3.Dot(normal, _movementUp));
-
-            // PlaneTypeForNormal in the local Source tree recognizes an axial
-            // plane only when its normal component is exactly +/-1. Near-axis
-            // mesh normals stay in the PLANE_ANY* range.
-            if (sourceX == 1f)
-                return SourcePlaneType.X;
-            if (sourceY == 1f)
-                return SourcePlaneType.Y;
-            if (sourceZ == 1f)
-                return SourcePlaneType.Z;
-
-            if (sourceZ >= sourceX && sourceZ >= sourceY)
-                return SourcePlaneType.AnyZ;
-            if (sourceX >= sourceY)
-                return SourcePlaneType.AnyX;
-            return SourcePlaneType.AnyY;
-        }
-
-        private int FilterSourceMovementHits(
-            int hitCount,
-            GokzSourceContents sourceContentsMask)
-        {
-            int writeIndex = 0;
-            for (int readIndex = 0; readIndex < hitCount; readIndex++)
-            {
-                RaycastHit hit = _moveHits[readIndex];
-                if (!ShouldHitSourceMovementCollider(
-                        hit.collider,
-                        sourceContentsMask))
-                    continue;
-
-                _moveHits[writeIndex++] = hit;
-            }
-
-            return writeIndex;
-        }
-
-        private bool ShouldHitSourceMovementCollider(
-            Collider collider,
-            GokzSourceContents sourceContentsMask)
-        {
-            if (collider == null || !collider.enabled ||
-                !collider.gameObject.activeInHierarchy || collider.isTrigger)
-                return false;
-
-            Transform playerTransform = _surfer != null
-                ? _surfer.MoveData.playerTransform
-                : null;
-            if (playerTransform != null &&
-                (collider.transform == playerTransform ||
-                 collider.transform.IsChildOf(playerTransform)))
-                return false;
-
-            int playerLayer = _sourceHullCollider != null
-                ? _sourceHullCollider.gameObject.layer
-                : playerTransform != null
-                    ? playerTransform.gameObject.layer
-                    : 0;
-            if (Physics.GetIgnoreLayerCollision(
-                    playerLayer,
-                    collider.gameObject.layer))
-                return false;
-
-            GokzSourceCollisionData collisionData =
-                GokzSurfaceProperties.ResolveCollisionData(collider);
-            // util_shared.cpp::StandardFilterRules permits world/static
-            // geometry and brush entities directly. Other Source entities
-            // are only considered when MONSTER is in the trace mask, even
-            // when their contents also intersect MOVEABLE or SOLID.
-            if ((sourceContentsMask & GokzSourceContents.Monster) == 0 &&
-                collisionData.entityKind ==
-                    GokzSourceEntityKind.NonBrushEntity)
-                return false;
-
-            GokzSourceCollisionData playerCollisionData =
-                _sourceHullCollider != null
-                    ? GokzSurfaceProperties.ResolveCollisionData(
-                        _sourceHullCollider)
-                    : default;
-            if (playerTransform != null &&
-                (IsSameSourceEntity(
-                     collisionData.owner,
-                     playerTransform) ||
-                 IsSameSourceEntity(
-                     playerCollisionData.owner,
-                     GetSourceEntityTransform(collider))))
-                return false;
-
-            GokzSourceContents teamContents =
-                GokzSourceContents.Team1 | GokzSourceContents.Team2;
-            GokzSourceContents playerTeamContents =
-                playerCollisionData.contents & teamContents;
-            GokzSourceContents effectiveContentsMask =
-                sourceContentsMask | playerTeamContents;
-            // CCSGameMovement::PlayerSolidMask(brushOnly: true) returns
-            // MASK_PLAYERSOLID_BRUSHONLY without the querying player's team
-            // bits. Normal player and ladder traces use the entity mask.
-            if (sourceContentsMask == PlayerSolidBrushContents)
-                effectiveContentsMask &= ~teamContents;
-            if ((collisionData.contents & effectiveContentsMask) == 0)
-                return false;
-
-            GokzSourceContents otherTeamContents =
-                collisionData.contents & teamContents;
-            if (collisionData.collisionGroup ==
-                    GokzSourceCollisionGroup.Player &&
-                playerTeamContents != GokzSourceContents.Empty &&
-                playerTeamContents == otherTeamContents)
-                return false;
-
-            return SourceGameRulesShouldCollide(
-                GokzSourceCollisionGroup.PlayerMovement,
-                collisionData.collisionGroup);
-        }
-
-        private static Transform GetSourceEntityTransform(Collider collider)
-        {
-            if (collider == null)
-                return null;
-
-            GokzSurfaceProperties properties =
-                collider.GetComponentInParent<GokzSurfaceProperties>();
-            if (properties != null)
-                return properties.transform;
-
-            Rigidbody body = collider.attachedRigidbody;
-            return body != null ? body.transform : collider.transform;
-        }
-
-        private static bool IsSameSourceEntity(
-            Transform first,
-            Transform second)
-        {
-            return first != null && second != null &&
-                (first == second || first.IsChildOf(second) ||
-                 second.IsChildOf(first));
-        }
-
-        private static bool SourceGameRulesShouldCollide(
-            GokzSourceCollisionGroup first,
-            GokzSourceCollisionGroup second)
-        {
-            // CGameRules sorts groups before applying its pair rules. These
-            // are every CS:GO/base-game exclusion that applies when one side
-            // is COLLISION_GROUP_PLAYER_MOVEMENT, including CS:GO's weapon
-            // and push-away overrides.
-            int group0 = Mathf.Min((int)first, (int)second);
-            int group1 = Mathf.Max((int)first, (int)second);
-
-            if (group0 == (int)GokzSourceCollisionGroup.PlayerMovement &&
-                group1 == (int)GokzSourceCollisionGroup.Weapon)
-                return false;
-
-            if ((group0 == (int)GokzSourceCollisionGroup.Player ||
-                 group0 == (int)GokzSourceCollisionGroup.PlayerMovement) &&
-                group1 == (int)GokzSourceCollisionGroup.PushAway)
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.Projectile &&
-                group1 == (int)GokzSourceCollisionGroup.DebrisBlockProjectile)
-                return true;
-
-            if (group0 == (int)GokzSourceCollisionGroup.DebrisBlockProjectile ||
-                group1 == (int)GokzSourceCollisionGroup.DebrisBlockProjectile)
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.InVehicle ||
-                group1 == (int)GokzSourceCollisionGroup.InVehicle)
-                return false;
-
-            if (group1 == (int)GokzSourceCollisionGroup.DoorBlocker &&
-                group0 != (int)GokzSourceCollisionGroup.Npc)
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.Debris ||
-                group0 == (int)GokzSourceCollisionGroup.DebrisTrigger)
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.Dissolving ||
-                group1 == (int)GokzSourceCollisionGroup.Dissolving)
-                return group0 == (int)GokzSourceCollisionGroup.None;
-
-            if (group0 == (int)GokzSourceCollisionGroup.InteractiveDebris &&
-                (group1 == (int)GokzSourceCollisionGroup.PlayerMovement ||
-                 group1 == (int)GokzSourceCollisionGroup.Player))
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.BreakableGlass &&
-                group1 == (int)GokzSourceCollisionGroup.BreakableGlass)
-                return false;
-
-            if (group1 == (int)GokzSourceCollisionGroup.Interactive &&
-                group0 != (int)GokzSourceCollisionGroup.None &&
-                group0 != (int)GokzSourceCollisionGroup.Debris &&
-                group0 != (int)GokzSourceCollisionGroup.InteractiveDebris)
-                return false;
-
-            if (group1 == (int)GokzSourceCollisionGroup.Projectile &&
-                (group0 == (int)GokzSourceCollisionGroup.Debris ||
-                 group0 == (int)GokzSourceCollisionGroup.Weapon ||
-                 group0 == (int)GokzSourceCollisionGroup.Projectile))
-                return false;
-
-            if (group1 == (int)GokzSourceCollisionGroup.Weapon &&
-                (group0 == (int)GokzSourceCollisionGroup.Vehicle ||
-                 group0 == (int)GokzSourceCollisionGroup.Player ||
-                 group0 == (int)GokzSourceCollisionGroup.Npc ||
-                 group0 == (int)GokzSourceCollisionGroup.Weapon))
-                return false;
-
-            if (group0 == (int)GokzSourceCollisionGroup.VehicleClip ||
-                group1 == (int)GokzSourceCollisionGroup.VehicleClip)
-                return group0 == (int)GokzSourceCollisionGroup.Vehicle;
-
-            return true;
         }
 
         private bool TryGetNearestHit(int hitCount, out RaycastHit nearest)
@@ -1517,7 +1063,6 @@ namespace RidahFPS.Controllers
             for (int i = 0; i < hitCount; i++)
             {
                 RaycastHit candidate = _moveHits[i];
-<<<<<<< HEAD
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider)
                     continue;
@@ -1534,25 +1079,6 @@ namespace RidahFPS.Controllers
                 Portal.LogPortalHostContact(
                     candidate, _lastBoxQueryCenter, ignoredByPortal);
                 if (ignoredByPortal ||
-=======
-                if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
-                    !ShouldHitSourceMovementCollider(
-                        candidate.collider,
-                        _lastSourceContentsMask) ||
-                    ShouldIgnorePlanarMeshSweepHit(
-                        candidate.collider,
-                        _lastBoxQueryCenter,
-                        _lastBoxQuerySweepDelta) ||
-                    Portal.ShouldIgnoreMovementCollision(
-                        candidate,
-                        _lastBoxQueryCenter,
-                        _lastBoxQueryHalfExtents +
-                            Vector3.one * CollisionSkin,
-                        _lastBoxQueryRotation,
-                        _lastBoxQuerySweepDelta,
-                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
-                        _movementUp) ||
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
                     (_surfer != null && _surfer.MoveData.playerTransform != null &&
                      candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform)))
                     continue;
@@ -1620,17 +1146,9 @@ namespace RidahFPS.Controllers
                 movingRoot,
                 out RaycastHit portalHit,
                 out bool portalRampContact) &&
-<<<<<<< HEAD
                 portalHit.distance < nearestDistance &&
                 (plainStartSolid ||
                  portalHit.distance >= plainLocalDistance))
-=======
-                (portalHit.collider == null ||
-                 ShouldHitSourceMovementCollider(
-                     portalHit.collider,
-                     _lastSourceContentsMask)) &&
-                portalHit.distance < nearestDistance)
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
             {
                 nearest = portalHit;
                 contactedPortalTransitionRamp = portalRampContact;
@@ -1772,13 +1290,6 @@ namespace RidahFPS.Controllers
             {
                 TryWaterCrouchBoost();
             }
-
-            // A zero-thickness non-convex MeshCollider (Unity Plane) has no
-            // interior volume for the Source startsolid/exit trace to model.
-            // If PhysX reports the hull straddling that sheet, move it back
-            // to a side using the pair's MTD before stuck recovery or movement.
-            if (_collisionReady)
-                RecoverPlanarMeshOverlaps();
 
             // Fix a standing hull that was left embedded by the previous
             // unduck before evaluating this command's duck state.
@@ -2002,18 +1513,6 @@ namespace RidahFPS.Controllers
                 _surfer.MoveData.playerTransform.position;
             PortablePlayer portablePlayer =
                 _surfer.MoveData.playerTransform.GetComponent<PortablePlayer>();
-            if (portablePlayer != null)
-            {
-                Vector3 movementHullHalfExtents =
-                    GetBoxHalfExtents(_isCrouched);
-                portablePlayer.SetPortalEnvironment(
-                    Portal.FindPlayerPortalEnvironment(
-                        _processStartPosition,
-                        portalPosition,
-                        movementHullHalfExtents,
-                        _movementUp,
-                        portablePlayer.PortalEnvironment));
-            }
             bool wasGroundedBeforePortal = Grounded;
             if (Portal.TryHandlePlayerMovement(
                 portablePlayer,
@@ -2077,8 +1576,7 @@ namespace RidahFPS.Controllers
                     Physics.SyncTransforms();
                 }
 
-                portablePlayer.RecordPortalTransition(exitPortal);
-                portablePlayer.QueuePortalEyeOffset(
+                portablePlayer.ApplyPortalEyeOffset(
                     transformedOldEyePosition);
             }
 
@@ -2378,9 +1876,8 @@ namespace RidahFPS.Controllers
 
             bool crouchedHull = _hullInitialized ? _isCrouched : _surfer.MoveData.crouching;
             Vector3 halfExtents = GetBoxHalfExtents(crouchedHull);
-            Vector3 origin = _surfer.MoveData.playerTransform.position;
-            bool moveToGroundTraceEnd = Grounded &&
-                _surfer.MoveData.waterLevel < GokzWaterLevel.Eyes;
+            Vector3 center = _surfer.MoveData.playerTransform.position + _movementUp * halfExtents.y;
+            Vector3 queryHalfExtents = GetQueryHalfExtents(halfExtents);
             // CGameMovement extends the ground trace by step size when the
             // player was already walking on ground. This is what keeps a
             // player attached while descending ramps and crossing small
@@ -2390,11 +1887,16 @@ namespace RidahFPS.Controllers
                 (Grounded && _surfer.MoveData.waterLevel < GokzWaterLevel.Eyes
                     ? StepHeight
                     : 0f);
-            SourceTraceResult groundTrace = TracePlayerBBox(
-                origin,
-                origin - _movementUp * probeDistance,
-                halfExtents);
-            bool found = IsStandableTrace(groundTrace);
+            int hitCount = BoxCastNonAlloc(
+                center,
+                queryHalfExtents,
+                -_movementUp,
+                Quaternion.identity,
+                probeDistance,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+
+            bool found = TryGetNearestStandableHit(hitCount, out hit);
             if (!found)
             {
                 // CGameMovement::TracePlayerBBoxForGround retries four
@@ -2420,50 +1922,29 @@ namespace RidahFPS.Controllers
                 for (int quadrant = 0; quadrant < quadrantOffsets.Length;
                      quadrant++)
                 {
-                    Vector3 offset = quadrantOffsets[quadrant];
-                    SourceTraceResult quadrantTrace = TracePlayerBBox(
-                        origin + offset,
-                        origin + offset - _movementUp * probeDistance,
-                        quadrantHalfExtents);
-                    if (!IsStandableTrace(quadrantTrace))
+                    int quadrantHitCount = BoxCastNonAlloc(
+                        center + quadrantOffsets[quadrant],
+                        GetQueryHalfExtents(quadrantHalfExtents),
+                        -_movementUp,
+                        Quaternion.identity,
+                        probeDistance,
+                        GetCollisionMask(),
+                        QueryTriggerInteraction.Ignore);
+                    if (!TryGetNearestStandableHit(
+                            quadrantHitCount,
+                            out RaycastHit quadrantHit))
                         continue;
 
                     // TracePlayerBBoxForGround returns on the first
                     // standable quadrant in Source's fixed order; it does
                     // not choose the numerically nearest quadrant hit.
-                    groundTrace = quadrantTrace;
-                    groundTrace.endPosition -= offset;
-                    found = true;
-                    break;
+                    hit = quadrantHit;
+                    return true;
                 }
             }
 
             if (found)
-            {
-                // Source CategorizePosition moves an already-grounded walker
-                // to a partial downward trace endpoint, but not when the
-                // trace began in solid or ran the full clear distance.
-                hit = groundTrace.unityHit;
-                if (moveToGroundTraceEnd &&
-                    !groundTrace.startSolid &&
-                    groundTrace.fraction > 0f &&
-                    groundTrace.fraction < 1f)
-                {
-                    float snapDistance = Mathf.Abs(Vector3.Dot(
-                        origin - groundTrace.endPosition,
-                        _movementUp));
-                    if (snapDistance > SourceDistanceEpsilon)
-                    {
-                        Vector3 snappedPosition = groundTrace.endPosition;
-                        _surfer.MoveData.playerTransform.position =
-                            snappedPosition;
-                        _surfer.MoveData.Origin = snappedPosition;
-                        Physics.SyncTransforms();
-                    }
-                }
-
                 return true;
-            }
 
             // Do not carry the previous grounded state forward. Source's
             // CategorizePosition is a real hull trace every tick; retaining
@@ -2472,9 +1953,10 @@ namespace RidahFPS.Controllers
             return false;
         }
 
-        private bool IsStandableTrace(SourceTraceResult trace)
+        private bool TryGetNearestStandableHit(
+            int hitCount,
+            out RaycastHit nearest)
         {
-<<<<<<< HEAD
             nearest = default;
             float nearestDistance = float.PositiveInfinity;
             bool found = false;
@@ -2520,20 +2002,36 @@ namespace RidahFPS.Controllers
                 if (Vector3.Dot(candidate.normal, _movementUp) < WalkableNormal ||
                     candidate.distance >= nearestDistance)
                     continue;
-=======
-            if (!trace.hit || trace.startSolid || trace.allSolid)
-                return false;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
 
-            // Source first accepts the nearest blocking trace, then decides
-            // whether that plane is standable. Filtering steep hits before
-            // selecting the nearest one can incorrectly see through a nearer
-            // wall or steep face to a farther floor.
-            float groundNormal = Vector3.Dot(
-                trace.planeNormal,
-                _movementUp);
-            return groundNormal >= WalkableNormal ||
-                (trace.contactedPortalRamp && groundNormal > 0f);
+                nearest = candidate;
+                nearestDistance = candidate.distance;
+                found = true;
+            }
+
+            Transform movingRoot = _surfer != null
+                ? _surfer.MoveData.playerTransform
+                : null;
+            if (Portal.TryGetPortalSpaceCollision(
+                _lastBoxQueryCenter,
+                _lastBoxQueryHalfExtents,
+                GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                _lastBoxQueryRotation,
+                _movementUp,
+                _lastBoxQuerySweepDelta,
+                GetCollisionMask(),
+                movingRoot,
+                out RaycastHit portalHit,
+                out bool portalRampContact) &&
+                (Vector3.Dot(portalHit.normal, _movementUp) >= WalkableNormal ||
+                 (portalRampContact &&
+                  Vector3.Dot(portalHit.normal, _movementUp) > 0f)) &&
+                portalHit.distance < nearestDistance)
+            {
+                nearest = portalHit;
+                return true;
+            }
+
+            return found;
         }
 
         // A zero-thickness non-convex MeshCollider - a single-quad ramp or a
@@ -3056,15 +2554,20 @@ namespace RidahFPS.Controllers
             if (!Grounded && !_wasOnLadder)
                 end -= _movementUp * DuckAirOriginOffset;
 
+            Vector3 delta = end - start;
             Vector3 halfExtents = GetBoxHalfExtents(false);
-            if ((end - start).sqrMagnitude >
-                CollisionSkin * CollisionSkin)
+            Vector3 center = start + _movementUp * halfExtents.y;
+            if (delta.sqrMagnitude > CollisionSkin * CollisionSkin)
             {
-                SourceTraceResult trace = TracePlayerBBox(
-                    start,
-                    end,
-                    halfExtents);
-                if (trace.hit || trace.startSolid || trace.allSolid)
+                int hitCount = BoxCastNonAlloc(
+                    center,
+                    GetQueryHalfExtents(halfExtents),
+                    delta.normalized,
+                    Quaternion.identity,
+                    delta.magnitude,
+                    GetCollisionMask(),
+                    QueryTriggerInteraction.Ignore);
+                if (TryGetNearestHit(hitCount, out _))
                     return false;
             }
 
@@ -3151,10 +2654,12 @@ namespace RidahFPS.Controllers
             Vector3 center = basePosition + _movementUp * (height * 0.5f);
             Vector3 hullHalfExtents = new Vector3(
                 HullRadius, height * 0.5f, HullRadius);
-            int count = OverlapBoxNonAlloc(
+            Vector3 halfExtents = GetQueryHalfExtents(
+                hullHalfExtents);
+            int count = Physics.OverlapBoxNonAlloc(
                 center,
-                hullHalfExtents,
-                ref _hullOverlaps,
+                halfExtents,
+                _hullOverlaps,
                 Quaternion.identity,
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
@@ -3163,21 +2668,11 @@ namespace RidahFPS.Controllers
             {
                 Collider collider = _hullOverlaps[i];
                 if (collider == null || collider == _sourceHullCollider ||
-                    !ShouldHitSourceMovementCollider(
-                        collider,
-                        PlayerSolidContents) ||
                     Portal.ShouldIgnoreMovementCollision(
                         collider, center, hullHalfExtents, Quaternion.identity) ||
                     collider.transform.IsChildOf(_surfer.MoveData.playerTransform))
                     continue;
-                if (ComputeHullPenetration(
-                        collider,
-                        basePosition,
-                        hullHalfExtents,
-                        out _,
-                        out float penetration) &&
-                    penetration > SourceDistanceEpsilon)
-                    return false;
+                return false;
             }
 
             return true;
@@ -3206,24 +2701,10 @@ namespace RidahFPS.Controllers
                 return false;
 
             Vector3 center = basePosition + _movementUp * halfExtents.y;
-            return IsBoxStuckAtCenter(
+            int count = Physics.OverlapBoxNonAlloc(
                 center,
-                halfExtents,
-                PlayerSolidContents);
-        }
-
-        private bool IsBoxStuckAtCenter(
-            Vector3 center,
-            Vector3 halfExtents,
-            GokzSourceContents sourceContentsMask)
-        {
-            if (_surfer == null || _surfer.MoveData.playerTransform == null)
-                return false;
-
-            int count = OverlapBoxNonAlloc(
-                center,
-                halfExtents,
-                ref _hullOverlaps,
+                GetQueryHalfExtents(halfExtents),
+                _hullOverlaps,
                 Quaternion.identity,
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
@@ -3231,18 +2712,11 @@ namespace RidahFPS.Controllers
             {
                 Collider collider = _hullOverlaps[i];
                 if (collider == null || collider == _sourceHullCollider ||
-<<<<<<< HEAD
                     collider.transform.IsChildOf(
                         _surfer.MoveData.playerTransform))
                     continue;
 
                 if (Portal.ShouldIgnoreMovementCollision(
-=======
-                    !ShouldHitSourceMovementCollider(
-                        collider,
-                        sourceContentsMask) ||
-                    Portal.ShouldIgnoreMovementCollision(
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
                         collider,
                         center,
                         halfExtents,
@@ -3272,7 +2746,6 @@ namespace RidahFPS.Controllers
                 // wall contact as stuck zeroes the clipped velocity every
                 // command, so the player can only escape by changing hull
                 // size (duck) or teleporting (reset).
-<<<<<<< HEAD
                 //
                 // A carved host needs a wider margin than the plain contact
                 // tolerance: leaning on the aperture rim is still a normal
@@ -3295,17 +2768,6 @@ namespace RidahFPS.Controllers
                      penetration > stuckTolerance)
                 {
                     blocker = collider;
-=======
-                Vector3 basePosition = center -
-                    _movementUp * halfExtents.y;
-                if (ComputeHullPenetration(
-                        collider,
-                        basePosition,
-                        halfExtents,
-                        out _,
-                        out float penetration) &&
-                    penetration > SourceDistanceEpsilon)
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
                     return true;
                 }
             }
@@ -3313,241 +2775,18 @@ namespace RidahFPS.Controllers
             return false;
         }
 
-        private bool ComputeHullPenetration(
-            Collider other,
-            Vector3 basePosition,
-            Vector3 halfExtents,
-            out Vector3 direction,
-            out float penetration)
+        private float GetContactPenetrationTolerance(Collider other)
         {
-            direction = Vector3.zero;
-            penetration = 0f;
-            if (_sourceHullCollider == null || other == null ||
-                _sourceHullTransform == null)
-                return false;
+            if (other == null)
+                return CollisionSkin;
 
-            Vector3 originalSize = _sourceHullCollider.size;
-            Vector3 originalCenter = _sourceHullCollider.center;
-            Vector3 scale = _sourceHullTransform.lossyScale;
-            if (Mathf.Abs(scale.x) < 0.000001f ||
-                Mathf.Abs(scale.y) < 0.000001f ||
-                Mathf.Abs(scale.z) < 0.000001f)
-                return false;
-
-            Vector3 worldCenter = _movementUp * halfExtents.y;
-            try
-            {
-                // ComputePenetration uses the BoxCollider's own dimensions,
-                // so temporarily give it the exact queried Source hull. This
-                // also makes stand-hull tests correct while the live player
-                // collider is crouched.
-                _sourceHullCollider.size = new Vector3(
-                    2f * halfExtents.x / Mathf.Abs(scale.x),
-                    2f * halfExtents.y / Mathf.Abs(scale.y),
-                    2f * halfExtents.z / Mathf.Abs(scale.z));
-                _sourceHullCollider.center = new Vector3(
-                    worldCenter.x / scale.x,
-                    worldCenter.y / scale.y,
-                    worldCenter.z / scale.z);
-                return Physics.ComputePenetration(
-                    _sourceHullCollider,
-                    basePosition,
-                    Quaternion.identity,
-                    other,
-                    other.transform.position,
-                    other.transform.rotation,
-                    out direction,
-                    out penetration);
-            }
-            finally
-            {
-                _sourceHullCollider.size = originalSize;
-                _sourceHullCollider.center = originalCenter;
-            }
-        }
-
-        private bool RecoverPlanarMeshOverlaps()
-        {
-            if (_surfer == null || _surfer.MoveData.playerTransform == null ||
-                _sourceHullCollider == null)
-                return false;
-
-            Transform playerTransform = _surfer.MoveData.playerTransform;
-            Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
-            bool recoveredAny = false;
-            const int maxRecoveryPasses = 8;
-
-            for (int pass = 0; pass < maxRecoveryPasses; pass++)
-            {
-                Vector3 basePosition = playerTransform.position;
-                Vector3 center = basePosition + _movementUp * halfExtents.y;
-                int count = OverlapBoxNonAlloc(
-                    center,
-                    halfExtents,
-                    ref _hullOverlaps,
-                    Quaternion.identity,
-                    GetCollisionMask(),
-                    QueryTriggerInteraction.Ignore);
-                bool recoveredThisPass = false;
-
-                for (int i = 0; i < count; i++)
-                {
-                    Collider collider = _hullOverlaps[i];
-                    if (!(collider is MeshCollider meshCollider) ||
-                        !IsZeroThicknessMesh(meshCollider) ||
-                        !ShouldHitSourceMovementCollider(
-                            collider,
-                            PlayerSolidContents) ||
-                        Portal.ShouldIgnoreMovementCollision(
-                            collider,
-                            center,
-                            halfExtents,
-                            Quaternion.identity) ||
-                        collider.transform.IsChildOf(playerTransform))
-                        continue;
-
-                    if (!ComputeHullPenetration(
-                            collider,
-                            basePosition,
-                            halfExtents,
-                            out Vector3 separationDirection,
-                            out float penetration) ||
-                        penetration <= SourceDistanceEpsilon ||
-                        separationDirection.sqrMagnitude <=
-                            SourcePlaneEpsilon * SourcePlaneEpsilon)
-                        continue;
-
-                    basePosition += separationDirection.normalized *
-                        (penetration + SourceDistanceEpsilon);
-                    playerTransform.position = basePosition;
-                    _surfer.MoveData.Origin = basePosition;
-                    Physics.SyncTransforms();
-                    recoveredAny = true;
-                    recoveredThisPass = true;
-                    break;
-                }
-
-                if (!recoveredThisPass)
-                    break;
-            }
-
-            return recoveredAny;
-        }
-
-        private static bool IsZeroThicknessMesh(MeshCollider meshCollider)
-        {
-            if (meshCollider == null || meshCollider.convex ||
-                meshCollider.sharedMesh == null)
-                return false;
-
-            Vector3 size = meshCollider.sharedMesh.bounds.size;
-            float smallest = Mathf.Min(size.x, Mathf.Min(size.y, size.z));
-            float largest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
-            return largest > 0f && smallest <=
-                Mathf.Max(0.00001f, largest * 0.00001f);
-        }
-
-        private static bool ShouldIgnorePlanarMeshSweepHit(
-            Collider collider,
-            Vector3 sweepStart,
-            Vector3 sweepDelta)
-        {
-            if (!(collider is MeshCollider meshCollider) ||
-                !TryGetZeroThicknessMeshPlane(
-                    meshCollider,
-                    out Vector3 planePoint,
-                    out Vector3 planeNormal))
-                return false;
-
-            if (sweepDelta.sqrMagnitude <= 0.000000000001f)
-                return true;
-
-            Vector3 direction = sweepDelta.normalized;
-            float side = Vector3.Dot(sweepStart - planePoint, planeNormal);
-            float directionAcrossPlane = Vector3.Dot(direction, planeNormal);
-            Vector3 blockingNormal;
-
-            if (Mathf.Abs(side) > SourceDistanceEpsilon)
-            {
-                blockingNormal = side > 0f ? planeNormal : -planeNormal;
-            }
-            else if (Mathf.Abs(directionAcrossPlane) > 0.00001f)
-            {
-                // If the start center is on the sheet, orient the blocking
-                // normal against the crossing direction so either side works.
-                blockingNormal = directionAcrossPlane > 0f
-                    ? -planeNormal
-                    : planeNormal;
-            }
-            else
-            {
-                // A sweep parallel to the sheet is contact, not penetration.
-                return true;
-            }
-
-            return Vector3.Dot(direction, blockingNormal) >= -0.00001f;
-        }
-
-        private static bool TryGetPlanarMeshBlockingNormal(
-            Collider collider,
-            Vector3 sweepStart,
-            Vector3 sweepDelta,
-            out Vector3 blockingNormal)
-        {
-            blockingNormal = Vector3.zero;
-            if (!(collider is MeshCollider meshCollider) ||
-                !TryGetZeroThicknessMeshPlane(
-                    meshCollider,
-                    out Vector3 planePoint,
-                    out Vector3 planeNormal) ||
-                sweepDelta.sqrMagnitude <= 0.000000000001f)
-                return false;
-
-            Vector3 direction = sweepDelta.normalized;
-            float side = Vector3.Dot(sweepStart - planePoint, planeNormal);
-            float directionAcrossPlane = Vector3.Dot(direction, planeNormal);
-            if (Mathf.Abs(side) > SourceDistanceEpsilon)
-            {
-                blockingNormal = side > 0f ? planeNormal : -planeNormal;
-            }
-            else if (Mathf.Abs(directionAcrossPlane) > 0.00001f)
-            {
-                blockingNormal = directionAcrossPlane > 0f
-                    ? -planeNormal
-                    : planeNormal;
-            }
-            else
-            {
-                return false;
-            }
-
-            return Vector3.Dot(direction, blockingNormal) < -0.00001f;
-        }
-
-        private static bool TryGetZeroThicknessMeshPlane(
-            MeshCollider meshCollider,
-            out Vector3 worldPoint,
-            out Vector3 worldNormal)
-        {
-            worldPoint = Vector3.zero;
-            worldNormal = Vector3.zero;
-            if (!IsZeroThicknessMesh(meshCollider))
-                return false;
-
-            Bounds bounds = meshCollider.sharedMesh.bounds;
-            Vector3 size = bounds.size;
-            Vector3 localNormal;
-            if (size.x <= size.y && size.x <= size.z)
-                localNormal = Vector3.right;
-            else if (size.y <= size.z)
-                localNormal = Vector3.up;
-            else
-                localNormal = Vector3.forward;
-
-            worldNormal = meshCollider.transform.worldToLocalMatrix
-                .transpose.MultiplyVector(localNormal).normalized;
-            worldPoint = meshCollider.transform.TransformPoint(bounds.center);
-            return worldNormal.sqrMagnitude > 0.999f;
+            float hullContactOffset = _sourceHullCollider != null
+                ? _sourceHullCollider.contactOffset
+                : 0f;
+            return Mathf.Max(
+                CollisionSkin,
+                Mathf.Max(hullContactOffset, other.contactOffset)) +
+                CollisionSkin;
         }
 
         // DIAGNOSTIC ONLY. Rate limited so a hull held for a second logs once
@@ -3944,18 +3183,48 @@ namespace RidahFPS.Controllers
             // while following the previous ladder normal. A wider reattach
             // probe invents ladder contact through nearby walls.
             float probeDistance = 2f * UnitScale;
-            Vector3 ladderOrigin =
-                _surfer.MoveData.playerTransform.position;
-            SourceTraceResult ladderTrace = TracePlayerBBox(
-                ladderOrigin,
-                ladderOrigin + probeDirection * probeDistance,
-                GetBoxHalfExtents(_isCrouched),
-                LadderTraceContents);
-            RaycastHit ladderHit = ladderTrace.unityHit;
-            bool found = ladderTrace.hit &&
-                IsLadderTrace(ladderTrace) &&
-                Mathf.Abs(Vector3.Dot(ladderTrace.planeNormal, up)) <
-                    0.999999f;
+            Vector3 center = _surfer.MoveData.playerTransform.position +
+                up * GetBoxHalfExtents(_isCrouched).y;
+            int hitCount = BoxCastNonAlloc(
+                center,
+                GetQueryHalfExtents(GetBoxHalfExtents(_isCrouched)),
+                probeDirection,
+                Quaternion.identity,
+                probeDistance,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+
+            RaycastHit ladderHit = default;
+            bool found = false;
+            float nearestDistance = float.PositiveInfinity;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit candidate = _moveHits[i];
+                if (candidate.collider == null || candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta,
+                        GetQueryHalfExtents(GetBoxHalfExtents(true)),
+                        _movementUp) ||
+                    candidate.collider.transform.IsChildOf(_surfer.MoveData.playerTransform) ||
+                    Vector3.Dot(candidate.normal, up) >= 0.999999f ||
+                    candidate.distance >= nearestDistance)
+                    continue;
+                GokzLadder ladder = candidate.collider.GetComponentInParent<GokzLadder>();
+                bool surfaceClimbable =
+                    GokzSurfaceProperties.Resolve(candidate.collider)
+                        .sourceClimbable;
+                if ((ladder != null && !ladder.Climbable) ||
+                    (ladder == null && !surfaceClimbable))
+                    continue;
+                ladderHit = candidate;
+                nearestDistance = candidate.distance;
+                found = true;
+            }
 
             if (!found)
             {
@@ -4109,8 +3378,7 @@ namespace RidahFPS.Controllers
                     traceStart + _movementUp * halfExtents.y,
                     traceEnd + _movementUp * halfExtents.y,
                     halfExtents,
-                    out RaycastHit candidate,
-                    LadderTraceContents) ||
+                    out RaycastHit candidate) ||
                 candidate.collider == null ||
                 !IsLadderCollider(candidate.collider) ||
                 Mathf.Abs(Vector3.Dot(candidate.normal, _movementUp) - 1f) <
@@ -4118,16 +3386,9 @@ namespace RidahFPS.Controllers
                 return false;
 
             ladderHit = candidate;
-            // Source first finds the ladder with PLAYERCLIP removed, then
-            // repeats the exact same swept player-bbox trace with the normal
-            // player-solid mask before snapping to its end position. This
-            // prevents an edge grab from placing the hull inside a clip brush.
-            SourceTraceResult placementTrace = TracePlayerBBox(
-                traceStart,
-                traceEnd,
-                halfExtents);
-            _surfer.MoveData.playerTransform.position =
-                placementTrace.endPosition;
+            _surfer.MoveData.playerTransform.position = candidate.point +
+                candidate.normal * (HullRadius + CollisionSkin) -
+                _movementUp * halfExtents.y;
             _surfer.MoveData.Origin =
                 _surfer.MoveData.playerTransform.position;
             _surfer.MoveData.Velocity = Vector3.zero;
@@ -4147,12 +3408,6 @@ namespace RidahFPS.Controllers
                 (ladder == null && surfaceClimbable);
         }
 
-        private static bool IsLadderTrace(SourceTraceResult trace)
-        {
-            return (trace.contents & GokzSourceContents.Ladder) != 0 ||
-                IsLadderCollider(trace.hitCollider);
-        }
-
         private void StayOnGround(ref Vector3 position, Vector3 halfExtents)
         {
             // Source WalkMove performs a second trace from origin + 2 HU to
@@ -4160,34 +3415,62 @@ namespace RidahFPS.Controllers
             // and moving down small steps instead of leaving a tiny airborne
             // gap after the horizontal move.
             float startOffset = 2f * UnitScale;
-            SourceTraceResult upTrace = TracePlayerBBox(
-                position,
-                position + _movementUp * startOffset,
-                halfExtents);
-            Vector3 safePosition = upTrace.endPosition;
+            Vector3 originalCenter = position + _movementUp * halfExtents.y;
+            int upHitCount = BoxCastNonAlloc(
+                originalCenter,
+                GetQueryHalfExtents(halfExtents),
+                _movementUp,
+                Quaternion.identity,
+                startOffset,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+            // TracePlayerBBox(origin, origin + 2 HU) returns origin + 2 HU
+            // when clear, or the actual trace end when it hits. The old
+            // adapter left the clear path at origin and added the 2 HU again
+            // after a hit, which is the opposite of Source in both cases.
+            Vector3 safePosition = position + _movementUp * startOffset;
+            if (TryGetNearestHit(upHitCount, out RaycastHit upHit))
+            {
+                safePosition += _movementUp *
+                    (Mathf.Max(0f, upHit.distance - CollisionSkin) -
+                        startOffset);
+            }
 
             Vector3 endPosition = position - _movementUp * StepHeight;
-            SourceTraceResult groundTrace = TracePlayerBBox(
-                safePosition,
-                endPosition,
-                halfExtents);
-            if (!groundTrace.hit || groundTrace.startSolid ||
-                groundTrace.allSolid)
+            Vector3 startCenter = safePosition + _movementUp * halfExtents.y;
+            Vector3 endCenter = endPosition + _movementUp * halfExtents.y;
+            Vector3 downDelta = endCenter - startCenter;
+            float traceDistance = downDelta.magnitude;
+            if (traceDistance <= CollisionSkin)
+                return;
+
+            int hitCount = BoxCastNonAlloc(
+                startCenter,
+                GetQueryHalfExtents(halfExtents),
+                downDelta / traceDistance,
+                Quaternion.identity,
+                traceDistance,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+
+            if (!TryGetNearestHit(
+                    hitCount,
+                    out RaycastHit groundHit,
+                    out bool contactedPortalRamp))
                 return;
 
             float groundNormal = Vector3.Dot(
-                groundTrace.planeNormal, _movementUp);
-            bool standableGround = groundNormal >= WalkableNormal ||
-                (groundTrace.contactedPortalRamp && groundNormal > 0f);
-            // CGameMovement::StayOnGround only snaps for a partial trace:
-            // zero-fraction contacts and a clear trace (fraction == 1) do not
-            // move the player.
-            if (groundTrace.fraction <= 0f ||
-                groundTrace.fraction >= 1f ||
-                !standableGround)
+                groundHit.normal, _movementUp);
+            if (groundNormal < WalkableNormal &&
+                !(contactedPortalRamp && groundNormal > 0f))
                 return;
 
-            position = groundTrace.endPosition;
+            float safeDistance = Mathf.Clamp(
+                groundHit.distance - CollisionSkin,
+                0f,
+                traceDistance);
+            position = safePosition +
+                (downDelta / traceDistance) * safeDistance;
         }
 
         private Vector3 GetBaseVelocity(Transform playerTransform)
@@ -4234,10 +3517,10 @@ namespace RidahFPS.Controllers
 
             Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
             Vector3 center = feet + _movementUp * halfExtents.y;
-            int count = OverlapBoxNonAlloc(
+            int count = Physics.OverlapBoxNonAlloc(
                 center,
-                halfExtents,
-                ref _sourceVolumeOverlaps,
+                GetQueryHalfExtents(halfExtents),
+                _sourceVolumeOverlaps,
                 Quaternion.identity,
                 Physics.AllLayers,
                 QueryTriggerInteraction.Collide);
@@ -4336,10 +3619,10 @@ namespace RidahFPS.Controllers
             Vector3 halfExtents = GetBoxHalfExtents(_isCrouched);
             Vector3 center = _surfer.MoveData.playerTransform.position +
                 _movementUp * halfExtents.y;
-            int count = OverlapBoxNonAlloc(
+            int count = Physics.OverlapBoxNonAlloc(
                 center,
-                halfExtents,
-                ref _sourceVolumeOverlaps,
+                GetQueryHalfExtents(halfExtents),
+                _sourceVolumeOverlaps,
                 Quaternion.identity,
                 Physics.AllLayers,
                 QueryTriggerInteraction.Collide);
@@ -4393,10 +3676,10 @@ namespace RidahFPS.Controllers
             // pushes for volumes already found at the endpoint.
             Vector3 startCenter = _processStartPosition +
                 _movementUp * halfExtents.y;
-            int startCount = OverlapBoxNonAlloc(
+            int startCount = Physics.OverlapBoxNonAlloc(
                 startCenter,
-                halfExtents,
-                ref _sourceVolumeOverlaps,
+                GetQueryHalfExtents(halfExtents),
+                _sourceVolumeOverlaps,
                 Quaternion.identity,
                 Physics.AllLayers,
                 QueryTriggerInteraction.Collide);
@@ -4429,7 +3712,7 @@ namespace RidahFPS.Controllers
             {
                 int sweptCount = BoxCastNonAlloc(
                     startCenter,
-                    halfExtents,
+                    GetQueryHalfExtents(halfExtents),
                     movementDelta / movementDistance,
                     Quaternion.identity,
                     movementDistance,
@@ -4620,12 +3903,10 @@ namespace RidahFPS.Controllers
         private int GetCollisionMask()
         {
             if (_surfer == null || _surfer.MoveData.playerTransform == null)
-                return Physics.AllLayers;
+                return Physics.DefaultRaycastLayers;
 
-            int playerLayer = _sourceHullCollider != null
-                ? _sourceHullCollider.gameObject.layer
-                : _surfer.MoveData.playerTransform.gameObject.layer;
-            int mask = Physics.AllLayers;
+            int playerLayer = _surfer.MoveData.playerTransform.gameObject.layer;
+            int mask = Physics.DefaultRaycastLayers;
             for (int layer = 0; layer < 32; layer++)
             {
                 if (Physics.GetIgnoreLayerCollision(playerLayer, layer))
@@ -4970,20 +4251,22 @@ namespace RidahFPS.Controllers
             // way as the SourceMod plugin.
             Vector3 duckHalfExtents = GetBoxHalfExtents(true);
             Vector3 center = landingOrigin + _movementUp * duckHalfExtents.y;
-            SourceTraceResult slopeTrace = TraceBoxByCenter(
+            int hitCount = BoxCastNonAlloc(
                 center,
-                center - _movementUp * MaxVelocity,
-                duckHalfExtents,
-                PlayerSolidBrushContents);
-            // gokz-mode-kztimer.sp uses MASK_PLAYERSOLID_BRUSHONLY, which
-            // retains MOVEABLE but excludes MONSTER contents.
-            if (!slopeTrace.hit || slopeTrace.startSolid ||
-                slopeTrace.allSolid)
+                GetQueryHalfExtents(duckHalfExtents),
+                -_movementUp,
+                Quaternion.identity,
+                MaxVelocity,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+            // gokz-mode-kztimer.sp uses MASK_PLAYERSOLID_BRUSHONLY and its
+            // trace filter excludes every client. Unity has no Source CONTENTS
+            // mask, so map those exclusions to this project's Player/Enemy
+            // tags while retaining movable world colliders in the query.
+            if (!TryGetNearestBrushOnlyHit(hitCount, out RaycastHit slopeHit))
                 return;
 
-            float groundUpDot = Vector3.Dot(
-                slopeTrace.planeNormal,
-                _movementUp);
+            float groundUpDot = Vector3.Dot(slopeHit.normal, _movementUp);
             if (groundUpDot < WalkableNormal || groundUpDot >= 0.999999f)
                 return;
 
@@ -4992,7 +4275,7 @@ namespace RidahFPS.Controllers
                 _movementUp);
             Vector3 clipped = ClipLandingVelocity(
                 landingVelocity,
-                slopeTrace.planeNormal,
+                slopeHit.normal,
                 _movementUp);
             if (clipped.magnitude > originalHorizontalVelocity.magnitude)
                 landingVelocity = clipped;
@@ -5011,6 +4294,60 @@ namespace RidahFPS.Controllers
             if (correction < 0f)
                 clipped -= horizontalNormal * correction;
             return Vector3.ProjectOnPlane(clipped, up);
+        }
+
+        private bool TryGetNearestBrushOnlyHit(
+            int hitCount,
+            out RaycastHit nearest)
+        {
+            nearest = default;
+            float nearestDistance = float.PositiveInfinity;
+            bool found = false;
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit candidate = _moveHits[i];
+                if (candidate.collider == null ||
+                    candidate.collider == _sourceHullCollider ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        candidate,
+                        _lastBoxQueryCenter,
+                        _lastBoxQueryHalfExtents +
+                            Vector3.one * CollisionSkin,
+                        _lastBoxQueryRotation,
+                        _lastBoxQuerySweepDelta) ||
+                    (_surfer != null &&
+                     _surfer.MoveData.playerTransform != null &&
+                     candidate.collider.transform.IsChildOf(
+                         _surfer.MoveData.playerTransform)) ||
+                    IsSourceMonsterCollider(candidate.collider) ||
+                    candidate.distance >= nearestDistance)
+                    continue;
+
+                nearest = candidate;
+                nearestDistance = candidate.distance;
+                found = true;
+            }
+
+            return found;
+        }
+
+        private static bool IsSourceMonsterCollider(Collider collider)
+        {
+            for (Transform current = collider != null
+                     ? collider.transform
+                     : null;
+                 current != null;
+                 current = current.parent)
+            {
+                // These tags exist in this LUO project. Source's brush-only
+                // movement mask excludes CONTENTS_MONSTER, which covers
+                // players and NPCs; the tags are the closest project mapping.
+                if (current.CompareTag("Player") ||
+                    current.CompareTag("Enemy"))
+                    return true;
+            }
+
+            return false;
         }
 
         private void AirMove(float realPreVelMod)
@@ -5209,16 +4546,23 @@ namespace RidahFPS.Controllers
             Vector3 startCenter,
             Vector3 endCenter,
             Vector3 halfExtents,
-            out RaycastHit hit,
-            GokzSourceContents sourceContentsMask = PlayerSolidContents)
+            out RaycastHit hit)
         {
-            SourceTraceResult trace = TraceBoxByCenter(
+            hit = default;
+            Vector3 delta = endCenter - startCenter;
+            float distance = delta.magnitude;
+            if (distance <= CollisionSkin)
+                return false;
+
+            int hitCount = BoxCastNonAlloc(
                 startCenter,
-                endCenter,
-                halfExtents,
-                sourceContentsMask);
-            hit = trace.unityHit;
-            return trace.hit;
+                GetQueryHalfExtents(halfExtents),
+                delta / distance,
+                Quaternion.identity,
+                distance,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+            return TryGetNearestHit(hitCount, out hit);
         }
 
         private void ApplyJump(bool perfect)
@@ -5315,14 +4659,22 @@ namespace RidahFPS.Controllers
                 return;
 
             Vector3 start = _surfer.MoveData.playerTransform.position;
-            SourceTraceResult trace = TracePlayerBBox(
-                start,
-                start - _movementUp * (2f * UnitScale),
-                GetBoxHalfExtents(_isCrouched));
-            if (!trace.hit || trace.startSolid || trace.allSolid)
+            Vector3 center = start + _movementUp *
+                GetBoxHalfExtents(_isCrouched).y;
+            int hitCount = BoxCastNonAlloc(
+                center,
+                GetQueryHalfExtents(GetBoxHalfExtents(_isCrouched)),
+                -_movementUp,
+                Quaternion.identity,
+                2f * UnitScale,
+                GetCollisionMask(),
+                QueryTriggerInteraction.Ignore);
+            if (!TryGetNearestHit(hitCount, out RaycastHit hit))
                 return;
 
-            _surfer.MoveData.playerTransform.position = trace.endPosition;
+            float distance = Mathf.Max(0f, hit.distance - CollisionSkin);
+            _surfer.MoveData.playerTransform.position -=
+                _movementUp * distance;
             _surfer.MoveData.Origin =
                 _surfer.MoveData.playerTransform.position;
             Physics.SyncTransforms();

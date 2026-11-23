@@ -9,7 +9,7 @@
         Tags
 		{ 
 			"RenderType" = "Opaque" 
-			"Queue" = "Geometry+1"
+			"Queue" = "Geometry" 
 			"RenderPipeline" = "UniversalPipeline"
 		}
 		
@@ -20,9 +20,6 @@
         Pass
         {
 		Name "Mask"
-			ZTest LEqual
-			ZWrite On
-
 			Stencil
 			{
 				Ref 1

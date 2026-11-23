@@ -5,16 +5,6 @@ using RenderPipeline = UnityEngine.Rendering.RenderPipelineManager;
 
 public class RecursivePortalCamera : MonoBehaviour
 {
-<<<<<<< HEAD
-=======
-    private const int PortalCount = 2;
-    private const int SourceDefaultRecursionDepth = 2;
-    private const int SourceMaxRecursionDepth = 10;
-    private const float HammerUnitsPerUnityUnit = 52.4934383202f;
-    private const float SourceClipOffsetHammerUnits = 2f;
-    private const float SourceFrustumEpsilonHammerUnits = 0.01f;
-
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
     [SerializeField]
     private Portal[] portals = new Portal[2];
 
@@ -24,16 +14,18 @@ public class RecursivePortalCamera : MonoBehaviour
     [SerializeField]
     private Camera portalCamera;
 
-    private RenderTexture tempTexture1;
-    private RenderTexture tempTexture2;
+    // Number of recursive views per portal. Each portal surface shows its
+    // depth-0 view, and inside that view the same portal shows depth 1, and so
+    // on, up to this limit. Source caps this at 10.
+    [SerializeField, Range(1, 10)]
+    private int recursionDepth = 3;
+
+    private RenderTexture[,] portalTextures = new RenderTexture[2, 0];
+    private int allocatedDepth;
     private int textureWidth;
     private int textureHeight;
     private bool rendering;
-    private bool mainCameraPoseOverridden;
-    private Vector3 previousMainCameraLocalPosition;
-    private Quaternion previousMainCameraLocalRotation;
-
-    private const int iterations = 1;
+    private Texture2D terminalTexture;
 
     private void Awake()
     {
@@ -63,19 +55,38 @@ public class RecursivePortalCamera : MonoBehaviour
         width = Mathf.Max(1, width);
         height = Mathf.Max(1, height);
 
-        if (tempTexture1 != null && tempTexture2 != null &&
-            textureWidth == width && textureHeight == height)
+        int depth = Mathf.Clamp(recursionDepth, 1, 10);
+        if (portalTextures.GetLength(1) == depth &&
+            textureWidth == width && textureHeight == height &&
+            portalTextures[0, 0] != null && portalTextures[1, 0] != null)
             return;
 
-        if (tempTexture1 != null)
-            tempTexture1.Release();
-        if (tempTexture2 != null)
-            tempTexture2.Release();
-
+        ReleaseRenderTextures();
         textureWidth = width;
         textureHeight = height;
-        tempTexture1 = CreateTexture("PortalViewA", width, height);
-        tempTexture2 = CreateTexture("PortalViewB", width, height);
+        allocatedDepth = depth;
+        portalTextures = new RenderTexture[2, depth];
+        for (int p = 0; p < 2; ++p)
+        {
+            for (int d = 0; d < depth; ++d)
+            {
+                portalTextures[p, d] = CreateTexture(
+                    "PortalView_" + p + "_Depth_" + d, width, height);
+            }
+        }
+
+        if (terminalTexture == null)
+        {
+            terminalTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
+            {
+                name = "PortalTerminal",
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            terminalTexture.SetPixel(0, 0, new Color(0.25f, 0.25f, 0.25f, 1f));
+            terminalTexture.Apply(false, true);
+        }
     }
 
     private static RenderTexture CreateTexture(string textureName, int width,
@@ -94,57 +105,54 @@ public class RecursivePortalCamera : MonoBehaviour
         return texture;
     }
 
+    // This is the binding scheme the working single-layer renderer used:
+    // set material.mainTexture directly on the portal's renderer. Keeping it
+    // (instead of MaterialPropertyBlock) preserves the known-good display.
+    private void SetSurfaceTexture(int portalIndex, Texture texture)
+    {
+        if (portals == null || portalIndex >= portals.Length ||
+            portals[portalIndex] == null ||
+            portals[portalIndex].Renderer == null)
+            return;
+        portals[portalIndex].Renderer.material.mainTexture = texture;
+    }
+
+    private Texture GetSurfaceTexture(int portalIndex)
+    {
+        if (portals == null || portalIndex >= portals.Length ||
+            portals[portalIndex] == null ||
+            portals[portalIndex].Renderer == null)
+            return null;
+        return portals[portalIndex].Renderer.material.mainTexture;
+    }
+
     private void BindTextures()
     {
-        if (portals != null && portals.Length > 0 && portals[0] != null &&
-            portals[0].Renderer != null)
-            portals[0].Renderer.material.mainTexture = tempTexture1;
-        if (portals != null && portals.Length > 1 && portals[1] != null &&
-            portals[1].Renderer != null)
-            portals[1].Renderer.material.mainTexture = tempTexture2;
+        // Final display: each surface shows its own depth-0 view.
+        if (allocatedDepth <= 0)
+            return;
+        SetSurfaceTexture(0, portalTextures[0, 0]);
+        SetSurfaceTexture(1, portalTextures[1, 0]);
     }
 
     private void OnEnable()
     {
         RenderPipeline.beginCameraRendering += UpdateCamera;
-        RenderPipeline.endCameraRendering += RestoreMainCameraAfterRender;
     }
 
     private void OnDisable()
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
-        RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
-        RestoreMainCameraPose();
     }
 
     private void OnDestroy()
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
-<<<<<<< HEAD
-        if (tempTexture1 != null)
-            tempTexture1.Release();
-        if (tempTexture2 != null)
-            tempTexture2.Release();
-=======
-        RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
-        RestoreMainCameraPose();
-        for (int i = 0; i < PortalCount; ++i)
-        {
-            if (portals != null && i < portals.Length &&
-                portals[i] != null && portals[i].Renderer != null)
-            {
-                // MaterialPropertyBlock.SetTexture rejects null textures.
-                // This component owns these per-renderer overrides, so remove
-                // the block itself before releasing its render textures.
-                portals[i].Renderer.SetPropertyBlock(null);
-            }
-        }
         ReleaseRenderTextures();
-
-        if (terminalStaticTexture != null)
+        if (terminalTexture != null)
         {
-            Destroy(terminalStaticTexture);
-            terminalStaticTexture = null;
+            Destroy(terminalTexture);
+            terminalTexture = null;
         }
     }
 
@@ -152,149 +160,78 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         if (portalTextures == null)
             return;
-
-        for (int portalIndex = 0;
-             portalIndex < portalTextures.GetLength(0);
-             ++portalIndex)
+        for (int p = 0; p < portalTextures.GetLength(0); ++p)
         {
-            for (int viewDepth = 0;
-                 viewDepth < portalTextures.GetLength(1);
-                 ++viewDepth)
+            for (int d = 0; d < portalTextures.GetLength(1); ++d)
             {
-                RenderTexture texture = portalTextures[portalIndex, viewDepth];
-                if (texture == null)
-                    continue;
-
-                texture.Release();
-                Destroy(texture);
-                portalTextures[portalIndex, viewDepth] = null;
+                if (portalTextures[p, d] != null)
+                {
+                    portalTextures[p, d].Release();
+                    portalTextures[p, d] = null;
+                }
             }
         }
-
-        portalTextures = new RenderTexture[PortalCount, 0];
         allocatedDepth = 0;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
     }
 
     private void UpdateCamera(ScriptableRenderContext context, Camera camera)
     {
         ResolveCameras();
-<<<<<<< HEAD
         if (camera != mainCamera || mainCamera == null || portalCamera == null ||
             portals == null || portals.Length < 2 || portals[0] == null ||
-=======
-        if (camera != mainCamera || mainCamera == null)
-            return;
-
-        // CalcPortalView changes the rendered eye pose without moving the
-        // player entity. Apply that pose before either the portal RTs or the
-        // main camera are culled, then restore the gameplay camera afterward.
-        RestoreMainCameraPose();
-        ApplyMainCameraPortalPose();
-
-        if (rendering ||
-            portalCamera == null || portals == null ||
-            portals.Length < PortalCount || portals[0] == null ||
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
             portals[1] == null || !portals[0].isPlaced ||
             !portals[1].isPlaced)
             return;
 
         EnsureRenderTextures();
-        BindTextures();
+        if (allocatedDepth <= 0)
+            return;
         if (rendering)
             return;
 
         rendering = true;
+        RenderTexture previousTarget = portalCamera.targetTexture;
+        Texture surface0 = GetSurfaceTexture(0);
+        Texture surface1 = GetSurfaceTexture(1);
         try
         {
-<<<<<<< HEAD
-            portalCamera.targetTexture = tempTexture1;
-            for (int i = iterations - 1; i >= 0; --i)
-                RenderCamera(portals[0], portals[1], i, context);
-=======
-            // Keep the prefab culling mask: it intentionally excludes Player.
-            portalCamera.clearFlags = mainCamera.clearFlags == CameraClearFlags.Depth ||
-                mainCamera.clearFlags == CameraClearFlags.Nothing
-                    ? CameraClearFlags.SolidColor
-                    : mainCamera.clearFlags;
-            portalCamera.backgroundColor = mainCamera.backgroundColor;
-            portalCamera.nearClipPlane = mainCamera.nearClipPlane;
-            portalCamera.farClipPlane = mainCamera.farClipPlane;
-            portalCamera.aspect = mainCamera.aspect;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
-
-            portalCamera.targetTexture = tempTexture2;
-            for (int i = iterations - 1; i >= 0; --i)
-                RenderCamera(portals[1], portals[0], i, context);
+            // Render deepest-first so a shallower layer can show the deeper
+            // layer on the portal surface. This is the only structural change
+            // from the working single-view renderer: each layer goes to its
+            // own RT instead of all layers overwriting one texture.
+            for (int depth = allocatedDepth - 1; depth >= 0; --depth)
+            {
+                RenderLayer(0, depth, context);
+                RenderLayer(1, depth, context);
+            }
         }
         finally
         {
-            portalCamera.targetTexture = null;
+            // Restore the surfaces to their final display textures.
+            SetSurfaceTexture(0, surface0);
+            SetSurfaceTexture(1, surface1);
+            portalCamera.targetTexture = previousTarget;
             portalCamera.ResetProjectionMatrix();
             rendering = false;
         }
     }
 
-<<<<<<< HEAD
-    private void RenderCamera(Portal inPortal, Portal outPortal,
-        int iterationID, ScriptableRenderContext context)
-=======
-    private void ApplyMainCameraPortalPose()
+    private void RenderLayer(int entryIndex, int depth,
+        ScriptableRenderContext context)
     {
-        PortablePlayer player =
-            mainCamera.GetComponentInParent<PortablePlayer>();
-        if (player == null)
-            return;
+        Portal inPortal = portals[entryIndex];
+        Portal outPortal = portals[1 - entryIndex];
 
-        // PlayerAiming applies Source's decaying eye offset to the child
-        // camera on both movement and render ticks. Use that actual rendered
-        // eye once; adding the offset again would double it.
-        Vector3 eyePosition = player.GetEyePosition();
-        Quaternion eyeRotation = mainCamera.transform.rotation;
-        bool portalViewMapped = Portal.TryGetPortalViewPose(
-            player,
-            eyePosition,
-            eyeRotation,
-            out Vector3 viewPosition,
-            out Quaternion viewRotation);
-        if (!portalViewMapped &&
-            player.GetPortalEyeOffset().sqrMagnitude <= 0.00000001f)
-            return;
+        // While drawing this layer, show the NEXT deeper view on the entry
+        // surface, so looking through the portal reveals the recursion.
+        Texture deeper = depth + 1 < allocatedDepth
+            ? (Texture)portalTextures[entryIndex, depth + 1]
+            : terminalTexture;
+        SetSurfaceTexture(entryIndex, deeper);
 
-        Transform cameraTransform = mainCamera.transform;
-        previousMainCameraLocalPosition = cameraTransform.localPosition;
-        previousMainCameraLocalRotation = cameraTransform.localRotation;
-        mainCameraPoseOverridden = true;
-        cameraTransform.SetPositionAndRotation(viewPosition, viewRotation);
-    }
+        portalCamera.targetTexture = portalTextures[entryIndex, depth];
 
-    private void RestoreMainCameraAfterRender(
-        ScriptableRenderContext context,
-        Camera camera)
-    {
-        if (camera == mainCamera)
-            RestoreMainCameraPose();
-    }
-
-    private void RestoreMainCameraPose()
-    {
-        if (!mainCameraPoseOverridden || mainCamera == null)
-            return;
-
-        mainCamera.transform.localPosition = previousMainCameraLocalPosition;
-        mainCamera.transform.localRotation = previousMainCameraLocalRotation;
-        mainCameraPoseOverridden = false;
-    }
-
-    private void RenderPortalView(
-        int entryIndex,
-        int recursionLevel,
-        Camera sourceViewCamera,
-        Vector3 sourcePosition,
-        Quaternion sourceRotation)
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
-    {
+        int iterationID = depth;
         Transform inTransform = inPortal.transform;
         Transform outTransform = outPortal.transform;
 
@@ -310,256 +247,21 @@ public class RecursivePortalCamera : MonoBehaviour
             cameraTransform.position = outTransform.position +
                 outTransform.rotation * relativePosition;
 
-<<<<<<< HEAD
             Quaternion relativeRotation = Quaternion.Inverse(inTransform.rotation) *
                 cameraTransform.rotation;
             relativeRotation = Quaternion.Euler(0f, 180f, 0f) * relativeRotation;
             cameraTransform.rotation = outTransform.rotation * relativeRotation;
         }
 
-        portalCamera.projectionMatrix = mainCamera.projectionMatrix;
-=======
-            ConfigurePortalCamera(
-                exitPortal, virtualPosition, virtualRotation);
-            if (depth + 1 >= allocatedDepth ||
-                !ShouldUpdatePortalView(
-                    entryPortal, portalCamera, depth + 1))
-                break;
-
-            currentPosition = virtualPosition;
-            currentRotation = virtualRotation;
-        }
-
-        Renderer entrySurface = entryPortal.Renderer;
-        Renderer exitSurface = exitPortal.Renderer;
-
-        for (int viewIndex = portalViewPositions.Count - 1;
-             viewIndex >= 0; --viewIndex)
-        {
-            int absoluteDepth = recursionLevel + viewIndex;
-            ConfigurePortalCamera(
-                exitPortal,
-                portalViewPositions[viewIndex],
-                portalViewRotations[viewIndex]);
-            portalCamera.targetTexture =
-                portalTextures[entryIndex, absoluteDepth];
-
-            Texture previousEntryTexture = GetPortalTexture(entryIndex);
-            bool exitSurfaceWasEnabled =
-                exitSurface != null && exitSurface.enabled;
-            Texture childTexture = viewIndex + 1 < portalViewPositions.Count
-                ? (Texture)portalTextures[entryIndex, absoluteDepth + 1]
-                : terminalStaticTexture;
-
-            BindPortalTexture(entryIndex, childTexture);
-            if (exitSurface != null)
-                exitSurface.enabled = false;
-
-            try
-            {
-                UniversalRenderPipeline.SingleCameraRequest request =
-                    new UniversalRenderPipeline.SingleCameraRequest
-                    {
-                        destination = portalCamera.targetTexture
-                    };
-                UnityEngine.Rendering.RenderPipeline.SubmitRenderRequest(
-                    portalCamera, request);
-            }
-            finally
-            {
-                if (entrySurface != null)
-                    BindPortalTexture(entryIndex, previousEntryTexture);
-                if (exitSurface != null)
-                    exitSurface.enabled = exitSurfaceWasEnabled;
-            }
-        }
-    }
-
-    private static void GetTransformedCameraPose(
-        Portal entryPortal,
-        Portal exitPortal,
-        Vector3 sourcePosition,
-        Quaternion sourceRotation,
-        out Vector3 virtualPosition,
-        out Quaternion virtualRotation)
-    {
-        Transform entry = entryPortal.transform;
-        Transform exit = exitPortal.transform;
-        Quaternion entryToExit = exit.rotation * PortalHalfTurn *
-            Quaternion.Inverse(entry.rotation);
-
-        virtualPosition = exit.position + entryToExit *
-            (sourcePosition - entry.position);
-        virtualRotation = entryToExit * sourceRotation;
-    }
-
-    private void ConfigurePortalCamera(
-        Portal exitPortal,
-        Vector3 virtualPosition,
-        Quaternion virtualRotation)
-    {
-        portalCamera.transform.SetPositionAndRotation(
-            virtualPosition, virtualRotation);
-        portalCamera.ResetWorldToCameraMatrix();
-        portalCamera.targetTexture = null;
-        ConfigurePortalProjection();
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
-
-        Plane clipPlane = new Plane(-outTransform.forward,
-            outTransform.position);
+        Plane plane = new Plane(-outTransform.forward, outTransform.position);
+        Vector4 clipPlaneWorldSpace = new Vector4(
+            plane.normal.x, plane.normal.y, plane.normal.z, plane.distance);
         Vector4 clipPlaneCameraSpace =
             Matrix4x4.Transpose(Matrix4x4.Inverse(
-                portalCamera.worldToCameraMatrix)) *
-            new Vector4(clipPlane.normal.x, clipPlane.normal.y,
-                clipPlane.normal.z, clipPlane.distance);
+                portalCamera.worldToCameraMatrix)) * clipPlaneWorldSpace;
+
         portalCamera.projectionMatrix = mainCamera.CalculateObliqueMatrix(
             clipPlaneCameraSpace);
-
-<<<<<<< HEAD
         UniversalRenderPipeline.RenderSingleCamera(context, portalCamera);
-=======
-        Vector4 planeWorld = new Vector4(
-            clipNormal.x,
-            clipNormal.y,
-            clipNormal.z,
-            -planeW);
-        Vector4 planeCamera = Matrix4x4.Transpose(Matrix4x4.Inverse(
-            portalCamera.worldToCameraMatrix)) * planeWorld;
-        portalCamera.projectionMatrix = portalCamera.CalculateObliqueMatrix(
-            planeCamera);
-    }
-
-    private void ConfigurePortalProjection()
-    {
-        portalCamera.orthographic = mainCamera.orthographic;
-        portalCamera.aspect = mainCamera.aspect;
-        portalCamera.nearClipPlane = mainCamera.nearClipPlane;
-        portalCamera.farClipPlane = mainCamera.farClipPlane;
-        // Source adds the exit portal to its visibility set before drawing a
-        // portal view. Unity has no matching per-view PVS injection, so baked
-        // occlusion can hide valid geometry in the remote scene.
-        portalCamera.useOcclusionCulling = false;
-
-        if (mainCamera.usePhysicalProperties)
-        {
-            portalCamera.usePhysicalProperties = true;
-            portalCamera.sensorSize = mainCamera.sensorSize;
-            portalCamera.focalLength = mainCamera.focalLength;
-            portalCamera.lensShift = mainCamera.lensShift;
-            portalCamera.gateFit = mainCamera.gateFit;
-        }
-        else
-        {
-            portalCamera.usePhysicalProperties = false;
-            if (mainCamera.orthographic)
-                portalCamera.orthographicSize = mainCamera.orthographicSize;
-            else
-                portalCamera.fieldOfView = mainCamera.fieldOfView;
-        }
-
-        // Source's portal view copies cameraView.zNear. Rebuild the projection
-        // from the matching camera settings before applying the exit plane.
-        portalCamera.ResetProjectionMatrix();
-    }
-
-    private static bool ShouldUpdatePortalView(
-        Portal portal,
-        Camera viewCamera,
-        int recursionLevel)
-    {
-        if (portal == null || portal.otherPortal == null ||
-            viewCamera == null || portal.Renderer == null)
-            return false;
-
-        Bounds localBounds = portal.Renderer.localBounds;
-        float halfHeight = localBounds.extents.y *
-            Mathf.Abs(portal.transform.lossyScale.y);
-
-        // Source skips its complex through-portal frustum while the view is
-        // close to the aperture; keep the root portal view eligible here.
-        if (recursionLevel == 0 &&
-            (portal.transform.position - viewCamera.transform.position)
-                .sqrMagnitude < halfHeight * halfHeight)
-            return true;
-
-        // Match Source's front-side test. The portal root's +Z points into its
-        // host wall; its visible side is the opposite normal.
-        Vector3 frontNormal = Portal.GetPortalPlaneNormal(portal);
-        if (Vector3.Dot(
-                frontNormal,
-                viewCamera.transform.position - portal.transform.position) <= 0f)
-            return false;
-
-        float z = localBounds.center.z;
-        List<Vector3> clippedCorners = new List<Vector3>(4)
-        {
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.min.x, localBounds.min.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.min.x, localBounds.max.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.max.x, localBounds.max.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.max.x, localBounds.min.y, z))
-        };
-        List<Vector3> scratch = new List<Vector3>(12);
-        Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(viewCamera);
-        float epsilon = SourceFrustumEpsilonHammerUnits /
-            HammerUnitsPerUnityUnit;
-
-        for (int planeIndex = 0; planeIndex < frustumPlanes.Length; ++planeIndex)
-        {
-            if (!ClipPolygonToPlane(
-                    clippedCorners, scratch, frustumPlanes[planeIndex], epsilon))
-                return false;
-
-            List<Vector3> swap = clippedCorners;
-            clippedCorners = scratch;
-            scratch = swap;
-        }
-
-        return clippedCorners.Count >= 3;
-    }
-
-    private static bool ClipPolygonToPlane(
-        List<Vector3> input,
-        List<Vector3> output,
-        Plane plane,
-        float epsilon)
-    {
-        output.Clear();
-        if (input.Count == 0)
-            return false;
-
-        Vector3 previous = input[input.Count - 1];
-        float previousDistance = plane.GetDistanceToPoint(previous);
-        bool previousInside = previousDistance >= -epsilon;
-
-        for (int i = 0; i < input.Count; ++i)
-        {
-            Vector3 current = input[i];
-            float currentDistance = plane.GetDistanceToPoint(current);
-            bool currentInside = currentDistance >= -epsilon;
-
-            if (currentInside != previousInside)
-            {
-                float denominator = previousDistance - currentDistance;
-                if (Mathf.Abs(denominator) > 0.000001f)
-                {
-                    float fraction = previousDistance / denominator;
-                    output.Add(previous + (current - previous) * fraction);
-                }
-            }
-
-            if (currentInside)
-                output.Add(current);
-
-            previous = current;
-            previousDistance = currentDistance;
-            previousInside = currentInside;
-        }
-
-        return output.Count >= 3;
->>>>>>> 0e6aa0ecb94d332d41d3f3596207ebe635e5ab67
     }
 }
