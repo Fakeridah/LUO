@@ -14,13 +14,15 @@ public class PortablePlayer : MonoBehaviour
     public LZM Player => player != null ? player : (player = GetComponent<LZM>());
     public Portal PortalEnvironment => portalEnvironment;
 
+    /// <summary>
+    /// Source CPortal_Player::EyePosition(): GetAbsOrigin() +
+    /// GetViewOffset() + m_PortalLocal.m_vEyeOffset. The camera transform is
+    /// the base eye only; the portal correction is render-only and must not
+    /// be written into the camera, so it has to be added here.
+    /// </summary>
     public Vector3 GetEyePosition()
     {
-        if (playerCamera == null)
-            playerCamera = GetComponentInChildren<Camera>();
-        return playerCamera != null
-            ? playerCamera.transform.position
-            : GetBaseEyePosition() + GetPortalEyeOffset();
+        return GetBaseEyePosition() + GetPortalEyeOffset();
     }
 
     /// <summary>
@@ -73,23 +75,6 @@ public class PortablePlayer : MonoBehaviour
                 pendingPortalEyePosition,
                 GetBaseEyePosition());
         hasPendingPortalEyeOffset = false;
-    }
-
-    /// <summary>
-    /// Compatibility entry point for the movement solver, which applies the
-    /// captured eye position at the end of the teleport command. PlayerAiming
-    /// in this project applies the offset to its own transform, so the offset
-    /// is written against that position directly instead of going through the
-    /// queued camera-space path.
-    /// </summary>
-    public void ApplyPortalEyeOffset(Vector3 transformedOldEyePosition)
-    {
-        if (playerAiming == null)
-            playerAiming = GetComponentInChildren<PlayerAiming>();
-        if (playerAiming != null)
-            playerAiming.SetPortalEyeOffset(
-                transformedOldEyePosition,
-                playerAiming.transform.position);
     }
 
     /// <summary>

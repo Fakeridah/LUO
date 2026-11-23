@@ -1513,6 +1513,18 @@ namespace RidahFPS.Controllers
                 _surfer.MoveData.playerTransform.position;
             PortablePlayer portablePlayer =
                 _surfer.MoveData.playerTransform.GetComponent<PortablePlayer>();
+            if (portablePlayer != null)
+            {
+                Vector3 movementHullHalfExtents =
+                    GetBoxHalfExtents(_isCrouched);
+                portablePlayer.SetPortalEnvironment(
+                    Portal.FindPlayerPortalEnvironment(
+                        _processStartPosition,
+                        portalPosition,
+                        movementHullHalfExtents,
+                        _movementUp,
+                        portablePlayer.PortalEnvironment));
+            }
             bool wasGroundedBeforePortal = Grounded;
             if (Portal.TryHandlePlayerMovement(
                 portablePlayer,
@@ -1576,7 +1588,8 @@ namespace RidahFPS.Controllers
                     Physics.SyncTransforms();
                 }
 
-                portablePlayer.ApplyPortalEyeOffset(
+                portablePlayer.RecordPortalTransition(exitPortal);
+                portablePlayer.QueuePortalEyeOffset(
                     transformedOldEyePosition);
             }
 

@@ -30,15 +30,11 @@ namespace RidahFPS.Controllers {
 		public Vector3 realRotation;
 
 		/// <summary>
-		/// Wraps euler angles into (-180, 180].
+		/// Wraps euler angles into (-180, 180]. LUO movement code stores
+		/// source-style view angles here, so every writer must use the short
+		/// representation. This is movement compatibility only; portal eye
+		/// offset methods below remain exactly as in f5eaa77.
 		/// </summary>
-		/// <remarks>
-		/// Quaternion.eulerAngles always reports [0, 360), so a rotation that is
-		/// a hair short of a full turn comes back as 359.99 instead of -0.01.
-		/// Anything that then eases that angle toward zero sweeps the entire
-		/// circle on the way. Every writer that stores an euler decomposition
-		/// into realRotation has to pass through here.
-		/// </remarks>
 		public static Vector3 WrapViewAngles(Vector3 euler)
 		{
 			return new Vector3(
@@ -48,6 +44,8 @@ namespace RidahFPS.Controllers {
 		}
 
 		private Vector3 portalEyeOffsetWorld;
+		private Camera portalViewCamera;
+		public Vector3 PortalEyeOffsetWorld => portalEyeOffsetWorld;
 
 		[Header("Aimpunch")]
 		[Tooltip("bigger number makes the response more damped, smaller is less damped, currently the system will overshoot, with larger damping values it won't")]
@@ -75,6 +73,11 @@ namespace RidahFPS.Controllers {
 			Cursor.visible = false;
 		}
 
+		private void Awake()
+		{
+			CachePortalViewCamera();
+		}
+
 		private void Update()
 		{
 			sensitivityMultiplier = GameOption.Get<GraphicOption>().sensitivity * 3 + .1f;
@@ -85,10 +88,7 @@ namespace RidahFPS.Controllers {
 				realRotation.x -= 360.0f;
 			}
 
-			// SurfCharacter eases the roll toward zero every frame. A writer
-			// that stored an euler decomposition can leave it on 359.99, and
-			// Lerp(359.99, 0) then spins the view once before settling. Keep it
-			// on the short side, whichever path set it.
+			// Keep roll on the short side for the LUO movement lerp path.
 			realRotation.z = Mathf.DeltaAngle(0f, realRotation.z);
 
 			//MiddleMouseScrollScale();
@@ -112,27 +112,57 @@ namespace RidahFPS.Controllers {
 			realRotation.y += punchAngle.y;
 
 			transform.eulerAngles = realRotation;
+			// C_Portal_Player::ClientThink also calls Reorient, independently
+			// of the movement-command PostThink path advanced by FixedUpdate.
+			AdvancePortalEyeOffset(Time.deltaTime);
 		}
 
 		public void SetPortalEyeOffset(Vector3 transformedOldEyePosition,
 			Vector3 newEyePosition)
 		{
+			// Source CPortal_Player::SetEyeOffset only stores
+			// vOldOrigin - vNewOrigin in m_PortalLocal.m_vEyeOffset. It never
+			// writes the player/camera transform. EyePosition() adds this
+			// render-only offset later, during CalcView.
 			portalEyeOffsetWorld = transformedOldEyePosition - newEyePosition;
 		}
 
-		/// <summary>
-		/// Portal movement compatibility value. The baseline portal camera reads
-		/// the main camera transform directly and does not apply this offset.
-		/// </summary>
-		public Vector3 PortalEyeOffsetWorld => portalEyeOffsetWorld;
-
-		/// <summary>
-		/// Returns the current camera position for movement code. Portal view
-		/// rendering uses the camera transform directly.
-		/// </summary>
 		public Vector3 GetPortalBaseEyePosition()
 		{
-			return transform.position;
+			CachePortalViewCamera();
+			if (portalViewCamera == null)
+				return transform.position;
+
+			// Source reads the live GetViewOffset() every time CalcView runs.
+			// LUO changes the child camera height while ducking/landing, so
+			// caching it in Awake would make the base eye stale. The portal
+			// offset is no longer written into this transform, so reading the
+			// current localPosition is both live and free of feedback.
+			Transform cameraTransform = portalViewCamera.transform;
+			Transform cameraParent = cameraTransform.parent;
+			return cameraParent != null
+				? cameraParent.TransformPoint(cameraTransform.localPosition)
+				: cameraTransform.localPosition;
+		}
+
+		public void AdvancePortalEyeOffset(float tickInterval)
+		{
+			if (tickInterval <= 0f)
+				return;
+
+			// Source ExponentialDecay(0.2f, frametime) treats 0.2 seconds as
+			// the half-life. ClientThink and movement-command PostThink each
+			// advance it with their own frame interval, as Source does.
+			portalEyeOffsetWorld *= Mathf.Exp(
+				-0.69314718f / 0.2f * tickInterval);
+		}
+
+		private void CachePortalViewCamera()
+		{
+			if (portalViewCamera != null)
+				return;
+
+			portalViewCamera = GetComponentInChildren<Camera>(true);
 		}
 
 		public void ViewPunch(Vector2 punchAmount)
