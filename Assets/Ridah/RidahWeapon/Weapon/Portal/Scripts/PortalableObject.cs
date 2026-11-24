@@ -380,8 +380,8 @@ public class PortalableObject : MonoBehaviour
                          !controllerHandlesCollision)
                 {
                     // Retain the existing local depenetration fallback for
-                    // transform-driven props when the mapped pose was already
-                    // clear or no forward candidate was found.
+                    // transform-driven props when the 100 HU forward search
+                    // could not find a clear candidate.
                     ResolveExitPenetration(ref currentPosition);
                     Physics.SyncTransforms();
                 }
