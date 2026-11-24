@@ -117,7 +117,7 @@ public class PortalPlacement : WeaponController
         if (!portal.placeEabled)
         {
             LogIgnored(portalID,
-                "player or a teleportable is inside this portal's trigger");
+                "player is inside this portal's trigger");
             return;
         }
         if (!lockShoot)

@@ -189,6 +189,20 @@ MonoBehaviour:
       offset: {x: 0, y: 0, z: 0, w: 0}
       cameraFieldOfView: 60
     depthInputAttachment: 0
+--- !u!114 &-4103552297611982301
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c7bc5f938f4d4550b780168d43a256a1, type: 3}
+  m_Name: PortalApertureRendererFeature
+  m_EditorClassIdentifier: 
+  m_Active: 1
+  compositeShader: {fileID: 4800000, guid: 83d1c0f5a7e34d42ba99327fac188003, type: 3}
 --- !u!114 &-3690972145036422227
 MonoBehaviour:
   m_ObjectHideFlags: 1
@@ -254,7 +268,8 @@ MonoBehaviour:
   - {fileID: 2868155626940999978}
   - {fileID: -7306047785604170558}
   - {fileID: -3690972145036422227}
-  m_RendererFeatureMap: e4aac6ff68046f8aad548c8dbc60bb182dece56fc138a944ab8b7197bfc0ac69eff8d005030a22a8112e24ca908a628fd44ffc4bed2f76852a295bb858bccd27c2bc08833fb49b9aad133ec36308c7ccl
+  - {fileID: -4103552297611982301}
+  m_RendererFeatureMap: e4aac6ff68046f8aad548c8dbc60bb182dece56fc138a944ab8b7197bfc0ac69eff8d005030a22a8112e24ca908a628fd44ffc4bed2f76852a295bb858bccd27c2bc08833fb49b9aad133ec36308c7cc238a9947ed400dc7l
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   m_AssetVersion: 3

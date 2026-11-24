@@ -191,7 +191,7 @@ namespace RidahFPS.Controllers
         private Vector3 _sampledGroundPosition;
         private Vector3 _sampledGroundVelocity;
         private bool _hasGroundTransformSample;
-        private readonly Collider[] _hullOverlaps = new Collider[32];
+        private Collider[] _hullOverlaps = new Collider[32];
         private readonly Collider[] _sourceVolumeOverlaps = new Collider[64];
         private readonly HashSet<GokzMovementVolume> _sourceVolumesThisTick =
             new HashSet<GokzMovementVolume>();
@@ -2709,18 +2709,61 @@ namespace RidahFPS.Controllers
             Vector3 halfExtents,
             out Collider blocker)
         {
+            return IsHullStuckAt(
+                basePosition,
+                halfExtents,
+                out blocker,
+                false,
+                GetCollisionMask());
+        }
+
+        private bool IsHullStuckAt(
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            out Collider blocker,
+            bool strictPenetrationCheck)
+        {
+            return IsHullStuckAt(
+                basePosition,
+                halfExtents,
+                out blocker,
+                strictPenetrationCheck,
+                GetCollisionMask());
+        }
+
+        private bool IsHullStuckAt(
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            out Collider blocker,
+            bool strictPenetrationCheck,
+            int collisionMask)
+        {
             blocker = null;
             if (_surfer == null || _surfer.MoveData.playerTransform == null)
                 return false;
 
             Vector3 center = basePosition + _movementUp * halfExtents.y;
-            int count = Physics.OverlapBoxNonAlloc(
-                center,
-                GetQueryHalfExtents(halfExtents),
-                _hullOverlaps,
-                Quaternion.identity,
-                GetCollisionMask(),
-                QueryTriggerInteraction.Ignore);
+            Vector3 queryHalfExtents = strictPenetrationCheck
+                ? halfExtents
+                : GetQueryHalfExtents(halfExtents);
+            int count;
+            while (true)
+            {
+                count = Physics.OverlapBoxNonAlloc(
+                    center,
+                    queryHalfExtents,
+                    _hullOverlaps,
+                    Quaternion.identity,
+                    collisionMask,
+                    QueryTriggerInteraction.Ignore);
+                if (count < _hullOverlaps.Length)
+                    break;
+
+                // A full NonAlloc buffer may omit the blocking collider. Grow
+                // only in crowded overlaps, then repeat the same query.
+                System.Array.Resize(
+                    ref _hullOverlaps, _hullOverlaps.Length * 2);
+            }
             for (int i = 0; i < count; i++)
             {
                 Collider collider = _hullOverlaps[i];
@@ -2764,7 +2807,9 @@ namespace RidahFPS.Controllers
                 // tolerance: leaning on the aperture rim is still a normal
                 // resting place, and only a hull clearly buried in the rim
                 // should be treated as the bad-landing case worth repairing.
-                float stuckTolerance = GetContactPenetrationTolerance(collider);
+                float stuckTolerance = strictPenetrationCheck
+                    ? CollisionSkin
+                    : GetContactPenetrationTolerance(collider);
                 if (carvedHost)
                     stuckTolerance = Mathf.Max(
                         stuckTolerance, CarvedHostStuckPenetration);
@@ -3936,6 +3981,10 @@ namespace RidahFPS.Controllers
             if (exitPortal == null)
                 return false;
 
+            // The layer collision matrix is constant during this synchronous
+            // recovery, so cache its filtered mask across the up-to-100 probes.
+            int exitCollisionMask = GetCollisionMask();
+
             // The landing clamp fits the hull to the exit aperture, but the
             // position that ends up placed can still straddle the rim: the
             // exit gate validates the crossing point, while the landing is the
@@ -3957,14 +4006,25 @@ namespace RidahFPS.Controllers
                 Vector3 fittedRoot =
                     rootPosition + (fittedCenter - landingCenter);
                 if (!IsHullPenetratingCollider(
-                        exitPortal.WallCollider, fittedRoot))
+                        exitPortal.WallCollider, fittedRoot) &&
+                    !IsHullStuckAt(
+                        fittedRoot, halfExtents, out _, true,
+                        exitCollisionMask))
                 {
                     rootPosition = fittedRoot;
                     return true;
                 }
             }
 
-            if (!IsHullStuckAt(rootPosition, halfExtents))
+            // Normal movement recovery tolerates Unity's contact-offset shell
+            // so resting against a wall does not freeze the player. A portal
+            // exit needs a stricter check: the mapped pose can begin a few
+            // millimetres inside a cube at an edge, and the inset movement
+            // hull then starts inside the collider without producing a useful
+            // sweep hit. Keep the same tolerance for ordinary movement.
+            if (!IsHullStuckAt(
+                    rootPosition, halfExtents, out _, true,
+                    exitCollisionMask))
                 return false;
 
             Vector3 center = rootPosition + _movementUp * halfExtents.y;
@@ -3977,7 +4037,9 @@ namespace RidahFPS.Controllers
             // the teleported point. That removes the lateral AABB corner
             // which most often catches on the exit wall.
             Vector3 centeredRoot = rootPosition - lateralOffset;
-            if (!IsHullStuckAt(centeredRoot, halfExtents))
+            if (!IsHullStuckAt(
+                    centeredRoot, halfExtents, out _, true,
+                    exitCollisionMask))
             {
                 rootPosition = centeredRoot;
                 return true;
@@ -3997,7 +4059,9 @@ namespace RidahFPS.Controllers
                         normal) < 0f)
                     continue;
 
-                if (!IsHullStuckAt(candidate, halfExtents))
+                if (!IsHullStuckAt(
+                        candidate, halfExtents, out _, true,
+                        exitCollisionMask))
                 {
                     rootPosition = candidate;
                     return true;

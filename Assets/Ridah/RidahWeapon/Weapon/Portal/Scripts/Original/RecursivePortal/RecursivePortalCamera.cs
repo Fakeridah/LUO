@@ -11,12 +11,38 @@ using RenderPipeline = UnityEngine.Rendering.RenderPipelineManager;
 /// </summary>
 public class RecursivePortalCamera : MonoBehaviour
 {
+    public static RecursivePortalCamera Active { get; private set; }
+
     private const int PortalCount = 2;
     private const int SourceDefaultRecursionDepth = 2;
     private const int SourceMaxRecursionDepth = 10;
-    private const float HammerUnitsPerUnityUnit = 52.4934383202f;
-    private const float SourceClipOffsetHammerUnits = 2f;
-    private const float SourceFrustumEpsilonHammerUnits = 0.01f;
+    private const float PortalNearClipUnity = 0.01905f;
+    private const float ExitClipOffsetUnity = 0.0381f;
+    private const float ClipCameraClearanceUnity = 0.01905f;
+    private const float FrustumEpsilonUnity = 0.0001905f;
+    private const float NearCapClipOverlapUnity = 0.005715f;
+    private const float NearCapProjectionOffsetUnity = 0.0001905f;
+    private const float NearCapCloseDistanceUnity = 0.00762f;
+    private const float NearCapDecalOffsetMinUnity = 0.02f / 52.4934383202f;
+    private const float NearCapDecalOffsetMaxUnity = 0.251f / 52.4934383202f;
+    private const float NearCapDecalOffsetBiasUnity = 0.04f / 52.4934383202f;
+    private const float NearCapDepthFixOffsetUnity = 0.275f / 52.4934383202f;
+    // Source initializes the close-eye cap at NDC +/-1.01, which is +/-0.005
+    // in Unity viewport coordinates.
+    private const float NearCapViewportMargin = 0.005f;
+
+    private sealed class PortalCapGeometry
+    {
+        public GameObject gameObject;
+        public Mesh mesh;
+        public MeshRenderer renderer;
+    }
+
+    private sealed class PortalNearPlaneCap
+    {
+        public PortalCapGeometry stencil;
+        public PortalCapGeometry depthFix;
+    }
 
     [SerializeField]
     private Portal[] portals = new Portal[PortalCount];
@@ -30,11 +56,27 @@ public class RecursivePortalCamera : MonoBehaviour
     [SerializeField, Range(1, SourceMaxRecursionDepth)]
     private int recursionDepth = SourceDefaultRecursionDepth;
 
+    [SerializeField, Range(0.25f, 1f)]
+    private float portalTextureScale = 0.75f;
+
     private RenderTexture[,] portalTextures = new RenderTexture[PortalCount, 0];
     private MaterialPropertyBlock[] portalPropertyBlocks;
     private readonly List<Vector3> portalViewPositions = new List<Vector3>();
     private readonly List<Quaternion> portalViewRotations =
         new List<Quaternion>();
+    private readonly List<Vector3> nearCapPolygon = new List<Vector3>(12);
+    private readonly List<Vector3> nearCapScratch = new List<Vector3>(12);
+    private readonly List<Vector3> nearCapLocalVertices = new List<Vector3>(12);
+    private readonly List<Vector2> nearCapScreenPolygon = new List<Vector2>(12);
+    private readonly List<int> nearCapTriangles = new List<int>(48);
+    private readonly List<Vector3> apertureCorners = new List<Vector3>(4);
+    private readonly List<Vector3> portalFrustumPolygon =
+        new List<Vector3>(12);
+    private readonly List<Vector3> portalFrustumScratch =
+        new List<Vector3>(12);
+    private readonly Plane[] reusableFrustumPlanes = new Plane[6];
+    private PortalNearPlaneCap[] nearPlaneCaps =
+        new PortalNearPlaneCap[PortalCount];
     private Texture2D terminalStaticTexture;
     private int textureWidth;
     private int textureHeight;
@@ -63,6 +105,8 @@ public class RecursivePortalCamera : MonoBehaviour
     private void Start()
     {
         ResolveCameras();
+        for (int i = 0; i < PortalCount; ++i)
+            EnsurePortalNearPlaneCap(i);
         EnsureRenderTextures();
         BindMainViewTextures();
     }
@@ -73,6 +117,7 @@ public class RecursivePortalCamera : MonoBehaviour
             mainCamera = Camera.main;
         if (portalCamera == null)
             portalCamera = GetComponentInChildren<Camera>(true);
+
     }
 
     private void CreateTerminalStaticTexture()
@@ -94,8 +139,11 @@ public class RecursivePortalCamera : MonoBehaviour
 
     private void EnsureRenderTextures()
     {
-        int width = mainCamera != null ? mainCamera.pixelWidth : Screen.width;
-        int height = mainCamera != null ? mainCamera.pixelHeight : Screen.height;
+        float scale = Mathf.Clamp(portalTextureScale, 0.25f, 1f);
+        int sourceWidth = mainCamera != null ? mainCamera.pixelWidth : Screen.width;
+        int sourceHeight = mainCamera != null ? mainCamera.pixelHeight : Screen.height;
+        int width = Mathf.RoundToInt(sourceWidth * scale);
+        int height = Mathf.RoundToInt(sourceHeight * scale);
         width = Mathf.Max(1, width);
         height = Mathf.Max(1, height);
         int depth = Mathf.Clamp(recursionDepth, 1, SourceMaxRecursionDepth);
@@ -155,16 +203,19 @@ public class RecursivePortalCamera : MonoBehaviour
     private void BindPortalTexture(int portalIndex, Texture texture)
     {
         if (portals == null || portalIndex >= portals.Length ||
-            portals[portalIndex] == null ||
-            portals[portalIndex].Renderer == null ||
-            portalPropertyBlocks == null)
+            portals[portalIndex] == null || portalPropertyBlocks == null)
             return;
 
         Renderer surface = portals[portalIndex].Renderer;
-        MaterialPropertyBlock block = portalPropertyBlocks[portalIndex];
-        surface.GetPropertyBlock(block);
-        block.SetTexture(MainTextureId, texture);
-        surface.SetPropertyBlock(block);
+        if (surface != null)
+        {
+            MaterialPropertyBlock block = portalPropertyBlocks[portalIndex];
+            surface.GetPropertyBlock(block);
+            block.SetTexture(MainTextureId, texture);
+            surface.SetPropertyBlock(block);
+        }
+
+        EnsurePortalNearPlaneCap(portalIndex);
     }
 
     private Texture GetPortalTexture(int portalIndex)
@@ -181,8 +232,181 @@ public class RecursivePortalCamera : MonoBehaviour
         return block.GetTexture(MainTextureId);
     }
 
+    private void EnsurePortalNearPlaneCap(int portalIndex)
+    {
+        if (portalIndex < 0 || portalIndex >= PortalCount ||
+            portals == null || portalIndex >= portals.Length ||
+            portals[portalIndex] == null ||
+            portals[portalIndex].Renderer == null)
+            return;
+
+        PortalNearPlaneCap cap = nearPlaneCaps[portalIndex];
+        if (cap == null)
+        {
+            cap = new PortalNearPlaneCap
+            {
+                stencil = CreatePortalCapGeometry(
+                    portalIndex, "Stencil"),
+                depthFix = CreatePortalCapGeometry(
+                    portalIndex, "Depth Fix")
+            };
+            nearPlaneCaps[portalIndex] = cap;
+        }
+
+        Renderer sourceRenderer = portals[portalIndex].Renderer;
+        ConfigurePortalCapGeometry(cap.stencil, sourceRenderer);
+        ConfigurePortalCapGeometry(cap.depthFix, sourceRenderer);
+    }
+
+    private PortalCapGeometry CreatePortalCapGeometry(
+        int portalIndex,
+        string geometryName)
+    {
+        GameObject capObject = new GameObject(
+            "Portal " + geometryName + " Near Plane Cap " + portalIndex)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            layer = portals[portalIndex].gameObject.layer
+        };
+        capObject.transform.SetParent(transform, false);
+
+        Mesh capMesh = new Mesh
+        {
+            name = "Portal " + geometryName + " Near Plane Cap Mesh " +
+                portalIndex,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        capMesh.MarkDynamic();
+
+        MeshFilter filter = capObject.AddComponent<MeshFilter>();
+        filter.sharedMesh = capMesh;
+        MeshRenderer capRenderer = capObject.AddComponent<MeshRenderer>();
+        capRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        capRenderer.receiveShadows = false;
+        capRenderer.lightProbeUsage = LightProbeUsage.Off;
+        capRenderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+        capRenderer.allowOcclusionWhenDynamic = false;
+        capRenderer.enabled = false;
+
+        return new PortalCapGeometry
+        {
+            gameObject = capObject,
+            mesh = capMesh,
+            renderer = capRenderer
+        };
+    }
+
+    private static void ConfigurePortalCapGeometry(
+        PortalCapGeometry cap,
+        Renderer sourceRenderer)
+    {
+        if (cap == null || cap.renderer == null || sourceRenderer == null)
+            return;
+
+        cap.renderer.sharedMaterial = sourceRenderer.sharedMaterial;
+        cap.renderer.renderingLayerMask = sourceRenderer.renderingLayerMask;
+        cap.gameObject.layer = sourceRenderer.gameObject.layer;
+    }
+
+    private void DisablePortalNearPlaneCaps()
+    {
+        if (nearPlaneCaps == null)
+            return;
+
+        for (int i = 0; i < nearPlaneCaps.Length; ++i)
+        {
+            PortalNearPlaneCap cap = nearPlaneCaps[i];
+            if (cap == null)
+                continue;
+
+            if (cap.stencil != null && cap.stencil.renderer != null)
+                cap.stencil.renderer.enabled = false;
+            if (cap.depthFix != null && cap.depthFix.renderer != null)
+                cap.depthFix.renderer.enabled = false;
+        }
+    }
+
+    private void ReleasePortalNearPlaneCaps()
+    {
+        if (nearPlaneCaps == null)
+            return;
+
+        for (int i = 0; i < nearPlaneCaps.Length; ++i)
+        {
+            PortalNearPlaneCap cap = nearPlaneCaps[i];
+            if (cap == null)
+                continue;
+
+            DestroyPortalCapGeometry(cap.stencil);
+            DestroyPortalCapGeometry(cap.depthFix);
+            nearPlaneCaps[i] = null;
+        }
+    }
+
+    private static void DestroyPortalCapGeometry(PortalCapGeometry cap)
+    {
+        if (cap == null)
+            return;
+
+        if (cap.gameObject != null)
+            Destroy(cap.gameObject);
+        if (cap.mesh != null)
+            Destroy(cap.mesh);
+    }
+
+    public Camera MainCamera
+    {
+        get
+        {
+            ResolveCameras();
+            return mainCamera;
+        }
+    }
+
+    public bool TryGetPortalAperture(
+        int portalIndex,
+        out Renderer surfaceRenderer,
+        out Renderer stencilCapRenderer,
+        out Renderer depthFixCapRenderer,
+        out Texture portalTexture)
+    {
+        surfaceRenderer = null;
+        stencilCapRenderer = null;
+        depthFixCapRenderer = null;
+        portalTexture = null;
+
+        if (portalIndex < 0 || portalIndex >= PortalCount ||
+            portals == null || portalIndex >= portals.Length ||
+            portals[portalIndex] == null || !portals[portalIndex].isPlaced ||
+            portals[portalIndex].otherPortal == null ||
+            !portals[portalIndex].otherPortal.isPlaced)
+            return false;
+
+        surfaceRenderer = portals[portalIndex].Renderer;
+        if (surfaceRenderer == null || !surfaceRenderer.enabled)
+            return false;
+
+        portalTexture = GetPortalTexture(portalIndex);
+        if (nearPlaneCaps != null && portalIndex < nearPlaneCaps.Length)
+        {
+            PortalNearPlaneCap cap = nearPlaneCaps[portalIndex];
+            if (cap != null)
+            {
+                if (cap.stencil != null && cap.stencil.renderer != null &&
+                    cap.stencil.renderer.enabled)
+                    stencilCapRenderer = cap.stencil.renderer;
+                if (cap.depthFix != null && cap.depthFix.renderer != null &&
+                    cap.depthFix.renderer.enabled)
+                    depthFixCapRenderer = cap.depthFix.renderer;
+            }
+        }
+
+        return portalTexture != null;
+    }
+
     private void OnEnable()
     {
+        Active = this;
         RenderPipeline.beginCameraRendering += UpdateCamera;
         RenderPipeline.endCameraRendering += RestoreMainCameraAfterRender;
     }
@@ -191,6 +415,9 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
         RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
+        if (Active == this)
+            Active = null;
+        DisablePortalNearPlaneCaps();
         RestoreMainCameraPose();
     }
 
@@ -198,6 +425,7 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         RenderPipeline.beginCameraRendering -= UpdateCamera;
         RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
+        ReleasePortalNearPlaneCaps();
         RestoreMainCameraPose();
         for (int i = 0; i < PortalCount; ++i)
         {
@@ -252,6 +480,8 @@ public class RecursivePortalCamera : MonoBehaviour
         if (camera != mainCamera || mainCamera == null)
             return;
 
+        DisablePortalNearPlaneCaps();
+
         // CalcPortalView changes the rendered eye pose without moving the
         // player entity. Apply that pose before either the portal RTs or the
         // main camera are culled, then restore the gameplay camera afterward.
@@ -271,7 +501,6 @@ public class RecursivePortalCamera : MonoBehaviour
 
         BindMainViewTextures();
         rendering = true;
-
         RenderTexture previousTarget = portalCamera.targetTexture;
         Vector3 previousPosition = portalCamera.transform.position;
         Quaternion previousRotation = portalCamera.transform.rotation;
@@ -322,6 +551,8 @@ public class RecursivePortalCamera : MonoBehaviour
             BindMainViewTextures();
             rendering = false;
         }
+
+        UpdatePortalNearPlaneCaps();
     }
 
     private void ApplyMainCameraPortalPose()
@@ -359,7 +590,10 @@ public class RecursivePortalCamera : MonoBehaviour
         Camera camera)
     {
         if (camera == mainCamera)
+        {
+            DisablePortalNearPlaneCaps();
             RestoreMainCameraPose();
+        }
     }
 
     private void RestoreMainCameraPose()
@@ -442,8 +676,13 @@ public class RecursivePortalCamera : MonoBehaviour
             if (exitSurface != null)
                 exitSurface.enabled = false;
 
+            int previousCullingMask = portalCamera.cullingMask;
             try
             {
+                // The proxy uses a layer hidden from the player camera. Keep
+                // it included in this offscreen portal view.
+                portalCamera.cullingMask = previousCullingMask |
+                    PortalableObject.PortalGhostLayerMask;
                 UniversalRenderPipeline.SingleCameraRequest request =
                     new UniversalRenderPipeline.SingleCameraRequest
                     {
@@ -454,6 +693,7 @@ public class RecursivePortalCamera : MonoBehaviour
             }
             finally
             {
+                portalCamera.cullingMask = previousCullingMask;
                 if (entrySurface != null)
                     BindPortalTexture(entryIndex, previousEntryTexture);
                 if (exitSurface != null)
@@ -491,16 +731,22 @@ public class RecursivePortalCamera : MonoBehaviour
         portalCamera.targetTexture = null;
         ConfigurePortalProjection();
 
-        // Source clips against the exit portal's forward plane, offset two
-        // Hammer units behind it to avoid z-fighting with crossing geometry.
+        // Source offsets the exit portal's forward clip plane by 0.0381
+        // Unity units to avoid z-fighting with crossing geometry.
         // PortalPlacement stores local +Z into the host surface. Source's
         // m_vForward is the visible/front normal, so use the matching outward
         // normal here rather than Unity's local +Z direction.
         Vector3 clipNormal = Portal.GetPortalPlaneNormal(exitPortal);
-        float clipOffset = SourceClipOffsetHammerUnits /
-            HammerUnitsPerUnityUnit;
         float planeW = Vector3.Dot(
-            clipNormal, exitPortal.transform.position) - clipOffset;
+            clipNormal, exitPortal.transform.position) - ExitClipOffsetUnity;
+
+        // Keep the mapped camera behind the clip plane. Source moves the plane
+        // when it approaches the eye so the oblique projection cannot become
+        // degenerate at the portal crossing.
+        float cameraPlaneDistance =
+            Vector3.Dot(clipNormal, virtualPosition) - planeW;
+        if (cameraPlaneDistance > -ClipCameraClearanceUnity)
+            planeW += cameraPlaneDistance + ClipCameraClearanceUnity;
 
         Vector4 planeWorld = new Vector4(
             clipNormal.x,
@@ -517,7 +763,8 @@ public class RecursivePortalCamera : MonoBehaviour
     {
         portalCamera.orthographic = mainCamera.orthographic;
         portalCamera.aspect = mainCamera.aspect;
-        portalCamera.nearClipPlane = mainCamera.nearClipPlane;
+        portalCamera.nearClipPlane = Mathf.Max(
+            mainCamera.nearClipPlane, PortalNearClipUnity);
         portalCamera.farClipPlane = mainCamera.farClipPlane;
         // Source adds the exit portal to its visibility set before drawing a
         // portal view. Unity has no matching per-view PVS injection, so baked
@@ -546,7 +793,257 @@ public class RecursivePortalCamera : MonoBehaviour
         portalCamera.ResetProjectionMatrix();
     }
 
-    private static bool ShouldUpdatePortalView(
+    private void UpdatePortalNearPlaneCaps()
+    {
+        if (mainCamera == null || portals == null ||
+            portals.Length < PortalCount || portals[0] == null ||
+            portals[1] == null || !portals[0].isPlaced ||
+            !portals[1].isPlaced)
+        {
+            DisablePortalNearPlaneCaps();
+            return;
+        }
+
+        for (int i = 0; i < PortalCount; ++i)
+        {
+            EnsurePortalNearPlaneCap(i);
+            PortalNearPlaneCap cap = nearPlaneCaps[i];
+            if (cap == null || cap.stencil == null || cap.depthFix == null)
+            {
+                continue;
+            }
+
+            Portal portal = portals[i];
+            Vector3 frontNormal = Portal.GetPortalPlaneNormal(portal);
+            frontNormal.Normalize();
+            float cameraSideDistance = Vector3.Dot(
+                frontNormal,
+                mainCamera.transform.position - portal.transform.position);
+            float stencilOffset = Mathf.Clamp(
+                cameraSideDistance,
+                NearCapDecalOffsetMinUnity,
+                NearCapDecalOffsetMaxUnity) + NearCapDecalOffsetBiasUnity;
+
+            bool stencilCapBuilt = TryBuildPortalNearPlaneCap(
+                i, cap.stencil, stencilOffset, false);
+            bool depthFixCapBuilt = TryBuildPortalNearPlaneCap(
+                i, cap.depthFix, NearCapDepthFixOffsetUnity, true);
+            cap.stencil.renderer.enabled = stencilCapBuilt;
+            cap.depthFix.renderer.enabled = depthFixCapBuilt;
+        }
+    }
+
+    private bool TryBuildPortalNearPlaneCap(
+        int portalIndex,
+        PortalCapGeometry cap,
+        float portalOffset,
+        bool requirePortalCenterClose)
+    {
+        Portal portal = portals[portalIndex];
+        Renderer sourceRenderer = portal != null ? portal.Renderer : null;
+        if (portal == null || !portal.isPlaced || sourceRenderer == null ||
+            !sourceRenderer.enabled || cap == null || cap.mesh == null)
+            return false;
+
+        Bounds localBounds = sourceRenderer.localBounds;
+        Vector3 cameraPosition = mainCamera.transform.position;
+        Vector3 frontNormal = Portal.GetPortalPlaneNormal(portal);
+        if (frontNormal.sqrMagnitude < 0.000001f)
+            return false;
+        frontNormal.Normalize();
+
+        float cameraSideDistance = Vector3.Dot(
+            frontNormal, cameraPosition - portal.transform.position);
+        if (requirePortalCenterClose &&
+            cameraSideDistance < -PortalNearClipUnity)
+            return false;
+
+        GetPortalApertureCorners(portal, localBounds, frontNormal, portalOffset);
+        Vector3 cameraLocal = portal.transform.InverseTransformPoint(
+            cameraPosition);
+        Vector3 closestLocal = new Vector3(
+            Mathf.Clamp(cameraLocal.x, localBounds.min.x, localBounds.max.x),
+            Mathf.Clamp(cameraLocal.y, localBounds.min.y, localBounds.max.y),
+            localBounds.center.z);
+        Vector3 closestWorld = portal.transform.TransformPoint(closestLocal) +
+            frontNormal * portalOffset;
+        float distanceToAperture = Vector3.Distance(
+            cameraPosition, closestWorld);
+        float apertureHalfHeight = localBounds.extents.y *
+            Mathf.Abs(portal.transform.lossyScale.y);
+
+        // DrawRenderFixMesh only runs within one portal half-height. The
+        // CreateMeshForPortals stencil cap has no such gate; the near-plane
+        // and frustum clipping below determine whether it has any area.
+        if (requirePortalCenterClose &&
+            (cameraPosition - portal.transform.position).sqrMagnitude >=
+            apertureHalfHeight * apertureHalfHeight)
+            return false;
+
+        bool built = distanceToAperture < NearCapCloseDistanceUnity
+            ? BuildClosePortalNearPlaneCap(
+                portal, frontNormal, portalOffset)
+            : BuildRegularPortalNearPlaneCap();
+        if (!built || nearCapScreenPolygon.Count < 3)
+            return false;
+
+        nearCapLocalVertices.Clear();
+        float capDepth = mainCamera.nearClipPlane +
+            NearCapProjectionOffsetUnity;
+        for (int i = 0; i < nearCapScreenPolygon.Count; ++i)
+        {
+            Vector2 screen = nearCapScreenPolygon[i];
+            Vector3 world = mainCamera.ViewportToWorldPoint(
+                new Vector3(screen.x, screen.y, capDepth));
+            nearCapLocalVertices.Add(transform.InverseTransformPoint(world));
+        }
+
+        if (nearCapLocalVertices.Count < 3)
+            return false;
+
+        BuildDoubleSidedFan(nearCapLocalVertices.Count);
+        cap.mesh.Clear(false);
+        cap.mesh.SetVertices(nearCapLocalVertices);
+        cap.mesh.SetTriangles(nearCapTriangles, 0, true);
+        cap.mesh.RecalculateBounds();
+        cap.renderer.sharedMaterial = sourceRenderer.sharedMaterial;
+        cap.renderer.renderingLayerMask = sourceRenderer.renderingLayerMask;
+        return true;
+    }
+
+    private void GetPortalApertureCorners(
+        Portal portal,
+        Bounds localBounds,
+        Vector3 frontNormal,
+        float portalOffset)
+    {
+        apertureCorners.Clear();
+        float z = localBounds.center.z;
+        apertureCorners.Add(portal.transform.TransformPoint(
+            new Vector3(localBounds.min.x, localBounds.min.y, z)) +
+            frontNormal * portalOffset);
+        apertureCorners.Add(portal.transform.TransformPoint(
+            new Vector3(localBounds.max.x, localBounds.min.y, z)) +
+            frontNormal * portalOffset);
+        apertureCorners.Add(portal.transform.TransformPoint(
+            new Vector3(localBounds.max.x, localBounds.max.y, z)) +
+            frontNormal * portalOffset);
+        apertureCorners.Add(portal.transform.TransformPoint(
+            new Vector3(localBounds.min.x, localBounds.max.y, z)) +
+            frontNormal * portalOffset);
+    }
+
+    private bool BuildRegularPortalNearPlaneCap()
+    {
+        nearCapPolygon.Clear();
+        nearCapPolygon.AddRange(apertureCorners);
+
+        Transform cameraTransform = mainCamera.transform;
+        Plane flippedNearPlane = new Plane(
+            -cameraTransform.forward,
+            cameraTransform.position + cameraTransform.forward *
+                (mainCamera.nearClipPlane + NearCapClipOverlapUnity));
+        if (!ClipNearCapPolygon(flippedNearPlane, 0f))
+            return false;
+
+        // CPortalRenderable_FlatBasic clips the polygon against all four
+        // side planes, with 0.01 HU of slack, before projecting it back onto
+        // the near plane. Clip in world space so the margin stays a distance
+        // in Source units instead of a resolution-dependent viewport margin.
+        GeometryUtility.CalculateFrustumPlanes(
+            mainCamera, reusableFrustumPlanes);
+        for (int i = 0; i < 4; ++i)
+        {
+            if (!ClipNearCapPolygon(
+                    reusableFrustumPlanes[i], FrustumEpsilonUnity))
+                return false;
+        }
+
+        nearCapScreenPolygon.Clear();
+        for (int i = 0; i < nearCapPolygon.Count; ++i)
+        {
+            Vector3 viewport = mainCamera.WorldToViewportPoint(
+                nearCapPolygon[i]);
+            if (viewport.z <= 0.0001f ||
+                float.IsNaN(viewport.x) || float.IsNaN(viewport.y) ||
+                float.IsInfinity(viewport.x) || float.IsInfinity(viewport.y))
+                return false;
+            nearCapScreenPolygon.Add(new Vector2(viewport.x, viewport.y));
+        }
+
+        return nearCapScreenPolygon.Count >= 3;
+    }
+
+    private bool BuildClosePortalNearPlaneCap(
+        Portal portal,
+        Vector3 frontNormal,
+        float portalOffset)
+    {
+        nearCapPolygon.Clear();
+        float near = mainCamera.nearClipPlane;
+        nearCapPolygon.Add(mainCamera.ViewportToWorldPoint(
+            new Vector3(-NearCapViewportMargin, -NearCapViewportMargin, near)));
+        nearCapPolygon.Add(mainCamera.ViewportToWorldPoint(
+            new Vector3(1f + NearCapViewportMargin,
+                -NearCapViewportMargin, near)));
+        nearCapPolygon.Add(mainCamera.ViewportToWorldPoint(
+            new Vector3(1f + NearCapViewportMargin,
+                1f + NearCapViewportMargin, near)));
+        nearCapPolygon.Add(mainCamera.ViewportToWorldPoint(
+            new Vector3(-NearCapViewportMargin,
+                1f + NearCapViewportMargin, near)));
+
+        // CPortalRenderable_FlatBasic::Internal_DrawRenderFixMesh's close-eye
+        // branch clips the camera near plane against the offset portal plane.
+        Plane destinationSide = new Plane(
+            -frontNormal,
+            portal.transform.position +
+                frontNormal * portalOffset);
+        if (!ClipNearCapPolygon(destinationSide, 0f))
+            return false;
+
+        // Source's close-eye branch stops here: it clips the expanded camera
+        // near-plane polygon against the portal plane, then projects it back
+        // onto the near plane. Do not add aperture-side clipping here; that
+        // shrinks the render-fix cap relative to the Source stencil path.
+        nearCapScreenPolygon.Clear();
+        for (int i = 0; i < nearCapPolygon.Count; ++i)
+        {
+            Vector3 viewport = mainCamera.WorldToViewportPoint(
+                nearCapPolygon[i]);
+            nearCapScreenPolygon.Add(new Vector2(viewport.x, viewport.y));
+        }
+
+        return nearCapScreenPolygon.Count >= 3;
+    }
+
+    private bool ClipNearCapPolygon(Plane plane, float epsilon)
+    {
+        nearCapScratch.Clear();
+        if (!ClipPolygonToPlane(
+                nearCapPolygon, nearCapScratch, plane, epsilon))
+            return false;
+
+        nearCapPolygon.Clear();
+        nearCapPolygon.AddRange(nearCapScratch);
+        return nearCapPolygon.Count >= 3;
+    }
+
+    private void BuildDoubleSidedFan(int vertexCount)
+    {
+        nearCapTriangles.Clear();
+        for (int i = 1; i < vertexCount - 1; ++i)
+        {
+            nearCapTriangles.Add(0);
+            nearCapTriangles.Add(i);
+            nearCapTriangles.Add(i + 1);
+            nearCapTriangles.Add(0);
+            nearCapTriangles.Add(i + 1);
+            nearCapTriangles.Add(i);
+        }
+    }
+
+    private bool ShouldUpdatePortalView(
         Portal portal,
         Camera viewCamera,
         int recursionLevel)
@@ -575,26 +1072,30 @@ public class RecursivePortalCamera : MonoBehaviour
             return false;
 
         float z = localBounds.center.z;
-        List<Vector3> clippedCorners = new List<Vector3>(4)
-        {
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.min.x, localBounds.min.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.min.x, localBounds.max.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.max.x, localBounds.max.y, z)),
-            portal.transform.TransformPoint(new Vector3(
-                localBounds.max.x, localBounds.min.y, z))
-        };
-        List<Vector3> scratch = new List<Vector3>(12);
-        Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(viewCamera);
-        float epsilon = SourceFrustumEpsilonHammerUnits /
-            HammerUnitsPerUnityUnit;
+        List<Vector3> clippedCorners = portalFrustumPolygon;
+        List<Vector3> scratch = portalFrustumScratch;
+        clippedCorners.Clear();
+        clippedCorners.Add(portal.transform.TransformPoint(new Vector3(
+            localBounds.min.x, localBounds.min.y, z)));
+        clippedCorners.Add(portal.transform.TransformPoint(new Vector3(
+            localBounds.min.x, localBounds.max.y, z)));
+        clippedCorners.Add(portal.transform.TransformPoint(new Vector3(
+            localBounds.max.x, localBounds.max.y, z)));
+        clippedCorners.Add(portal.transform.TransformPoint(new Vector3(
+            localBounds.max.x, localBounds.min.y, z)));
+        GeometryUtility.CalculateFrustumPlanes(
+            viewCamera, reusableFrustumPlanes);
+        float epsilon = FrustumEpsilonUnity;
 
-        for (int planeIndex = 0; planeIndex < frustumPlanes.Length; ++planeIndex)
+        for (int planeIndex = 0;
+             planeIndex < reusableFrustumPlanes.Length;
+             ++planeIndex)
         {
             if (!ClipPolygonToPlane(
-                    clippedCorners, scratch, frustumPlanes[planeIndex], epsilon))
+                    clippedCorners,
+                    scratch,
+                    reusableFrustumPlanes[planeIndex],
+                    epsilon))
                 return false;
 
             List<Vector3> swap = clippedCorners;
@@ -616,14 +1117,16 @@ public class RecursivePortalCamera : MonoBehaviour
             return false;
 
         Vector3 previous = input[input.Count - 1];
-        float previousDistance = plane.GetDistanceToPoint(previous);
-        bool previousInside = previousDistance >= -epsilon;
+        float previousDistance =
+            plane.GetDistanceToPoint(previous) + epsilon;
+        bool previousInside = previousDistance >= 0f;
 
         for (int i = 0; i < input.Count; ++i)
         {
             Vector3 current = input[i];
-            float currentDistance = plane.GetDistanceToPoint(current);
-            bool currentInside = currentDistance >= -epsilon;
+            float currentDistance =
+                plane.GetDistanceToPoint(current) + epsilon;
+            bool currentInside = currentDistance >= 0f;
 
             if (currentInside != previousInside)
             {

@@ -16,6 +16,14 @@ public class PlayerController : PortalableObject
     public override void Warp()
     {
         base.Warp();
-        cameraMove.ResetTargetRotation();
+    }
+
+    protected override void OnPortalTeleported(
+        Portal entryPortal,
+        Portal exitPortal,
+        Quaternion portalRotation)
+    {
+        if (cameraMove != null)
+            cameraMove.ResetTargetRotation();
     }
 }

@@ -135,6 +135,16 @@ public class Portal : MonoBehaviour
     private const float SourcePortalHalfWidthHu = 32f;
     private const float SourcePortalHalfHeightHu = 56f;
     private const float SourcePortalHalfDepthHu = 2f;
+    // c_prop_portal.cpp skips ghosting entities whose center is more than
+    // 5 Hammer units behind the entry plane.
+    private const float SourceGhostBackSideLimit =
+        5f / PortalTransformMath.HammerUnitsPerUnityUnit;
+    // PortalSimulation.cpp builds the ghosting hole from 0.5 HU in front of
+    // the entry plane through 500 HU behind it.
+    private const float SourceGhostHoleFrontInset =
+        0.5f / PortalTransformMath.HammerUnitsPerUnityUnit;
+    private const float SourceGhostHoleDepth =
+        500f / PortalTransformMath.HammerUnitsPerUnityUnit;
     private const float SourcePortalBumpForgivenessHu = 2f;
     // portalsimulation.cpp:71. Source separates the two collision halves by
     // 1/16 HU along the portal plane so the front piece and rear strips never
@@ -187,6 +197,7 @@ public class Portal : MonoBehaviour
     // moves the player, so the Source-style pure-transform landing stays.
     private static Portal s_recentExitPortal;
     private const float SourceExitClearanceMargin = 0.02f;
+    public const float PortalableObjectExitClearance = SourceExitClearanceMargin;
 
     private const float SourceBlindRecessDepthHu =
         SourcePlayerHalfDepthHu + SourcePortalHalfDepthHu +
@@ -238,6 +249,9 @@ public class Portal : MonoBehaviour
     private Quaternion attachmentLocalRotation;
     private Vector3 initialWorldScale;
     private static RaycastHit[] portalMovementHits = new RaycastHit[32];
+    private static Collider[] portalItemRegistrationHits = new Collider[32];
+    private static int lastItemRegistrationSyncFrame = -1;
+    private static bool itemLayerSceneScanComplete;
 
     // Kill switch for the remote exit-side pre-simulation. The landing is
     // the exit portal's centre, so the mapped incoming path is no longer
@@ -275,12 +289,13 @@ public class Portal : MonoBehaviour
     {
         if (!ActivePortals.Contains(this))
             ActivePortals.Add(this);
+        itemLayerSceneScanComplete = false;
     }
 
     private void OnDisable()
     {
         ActivePortals.Remove(this);
-        playerTriggerColliders.Clear();
+        ClearPortalOccupants();
 
         // Losing one end closes both holes. Release this portal's carve
         // first, then restore the partner's host wall if it was carved.
@@ -312,6 +327,7 @@ public class Portal : MonoBehaviour
     private void Update()
     {
         UpdateAttachmentPose();
+        RegisterPortalableItemsAtAperture();
 
         bool otherPlaced = otherPortal != null && otherPortal.isPlaced;
         if (Renderer != null)
@@ -319,21 +335,6 @@ public class Portal : MonoBehaviour
             Renderer.enabled = otherPlaced &&
                 (vfx == null || vfx.localScale.x > 1.2f) &&
                 (otherPortal.vfx == null || otherPortal.vfx.localScale.x > 1.2f);
-        }
-
-        for (int i = portalObjects.Count - 1; i >= 0; --i)
-        {
-            PortalableObject portalObject = portalObjects[i];
-            if (portalObject == null)
-            {
-                portalObjects.RemoveAt(i);
-                continue;
-            }
-
-            Vector3 objectPosition = transform.InverseTransformPoint(
-                portalObject.transform.position);
-            if (otherPlaced && objectPosition.z > 0f)
-                portalObject.Warp();
         }
 
         if (vfx != null)
@@ -367,14 +368,12 @@ public class Portal : MonoBehaviour
         if (otherPortal == null || !otherPortal.isPlaced)
             return;
 
+        RegisterPortalableItem(other);
+
         PortalableObject portalObject =
             other.GetComponentInParent<PortalableObject>();
-        if (portalObject != null && !portalObjects.Contains(portalObject))
-        {
-            portalObjects.Add(portalObject);
-            placeEabled = false;
-            portalObject.SetIsInPortal(this, otherPortal, wallCollider);
-        }
+        if (portalObject != null)
+            portalObject.RefreshPortalState();
 
         PortablePlayer player = other.GetComponentInParent<PortablePlayer>();
         if (player != null)
@@ -386,8 +385,7 @@ public class Portal : MonoBehaviour
             return;
         }
 
-        placeEabled = portalObjects.Count == 0 &&
-            playerTriggerColliders.Count == 0;
+        RefreshPlacementEnabled();
     }
 
     private void OnTriggerStay(Collider other)
@@ -396,24 +394,133 @@ public class Portal : MonoBehaviour
         // player is touching a portal, before the next movement command runs.
         // The old code only updated it after movement, so the portal-aware
         // trace always worked with stale state.
+        RegisterPortalableItem(other);
         PortablePlayer player = other.GetComponentInParent<PortablePlayer>();
         if (player != null && HasActivePair(this))
             player.SetPortalEnvironment(this);
+        PortalableObject portalObject =
+            other.GetComponentInParent<PortalableObject>();
+        if (portalObject != null)
+            portalObject.RefreshPortalState();
+    }
+
+    private void RegisterPortalableItem(Collider candidate)
+    {
+        if (!HasActivePair(this) || candidate == null)
+            return;
+
+        int itemLayer = LayerMask.NameToLayer("Item");
+        if (itemLayer >= 0)
+            PortalableObject.EnsureForItemLayer(candidate, itemLayer);
+    }
+
+    private void RegisterPortalableItemsAtAperture()
+    {
+        if (!HasActivePair(this) || portalCollider == null ||
+            !portalCollider.enabled)
+            return;
+
+        int itemLayer = LayerMask.NameToLayer("Item");
+        if (itemLayer < 0)
+            return;
+
+        // Register scene props before they reach a portal. If the component
+        // is first added after a fast object has already entered the carved
+        // recess, its initial pose cannot describe the missed crossing.
+        if (!itemLayerSceneScanComplete)
+        {
+            Collider[] sceneColliders =
+                FindObjectsByType<Collider>(FindObjectsSortMode.None);
+            for (int i = 0; i < sceneColliders.Length; ++i)
+            {
+                if (sceneColliders[i] != null)
+                    PortalableObject.EnsureForItemLayer(
+                        sceneColliders[i], itemLayer);
+            }
+            itemLayerSceneScanComplete = true;
+        }
+
+        // Item props are often moved by scripts without a Rigidbody. Sync
+        // transforms before querying the small portal trigger volume so
+        // registration does not depend on trigger callbacks.
+        if (!Physics.autoSyncTransforms &&
+            lastItemRegistrationSyncFrame != Time.frameCount)
+        {
+            Physics.SyncTransforms();
+            lastItemRegistrationSyncFrame = Time.frameCount;
+        }
+
+        Bounds portalBounds = portalCollider.bounds;
+        int count;
+        while (true)
+        {
+            count = Physics.OverlapBoxNonAlloc(
+                portalBounds.center,
+                portalBounds.extents,
+                portalItemRegistrationHits,
+                Quaternion.identity,
+                Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore);
+            if (count < portalItemRegistrationHits.Length)
+                break;
+
+            System.Array.Resize(
+                ref portalItemRegistrationHits,
+                portalItemRegistrationHits.Length * 2);
+        }
+
+        for (int i = 0; i < count; ++i)
+        {
+            Collider candidate = portalItemRegistrationHits[i];
+            if (candidate != null)
+                PortalableObject.EnsureForItemLayer(candidate, itemLayer);
+        }
     }
 
     private void OnTriggerExit(Collider other)
     {
         PortalableObject portalObject =
             other.GetComponentInParent<PortalableObject>();
-        if (portalObject != null && portalObjects.Remove(portalObject))
-        {
-            portalObject.ExitPortal(wallCollider);
-        }
+        if (portalObject != null)
+            portalObject.RefreshPortalState();
 
         playerTriggerColliders.Remove(other);
+        RefreshPlacementEnabled();
+    }
 
-        placeEabled = portalObjects.Count == 0 &&
-            playerTriggerColliders.Count == 0;
+    private void RefreshPlacementEnabled()
+    {
+        for (int i = portalObjects.Count - 1; i >= 0; --i)
+        {
+            if (portalObjects[i] == null)
+                portalObjects.RemoveAt(i);
+        }
+
+        // A prop standing in the portal opening must not lock that portal's
+        // gun slot. The portal simulator can transfer its occupancy when the
+        // portal moves; only moving the portal while the player is inside the
+        // trigger is unsafe for the player's active movement environment.
+        placeEabled = playerTriggerColliders.Count == 0;
+    }
+
+    internal void SetPortalableObjectOccupancy(
+        PortalableObject portalObject,
+        bool occupied)
+    {
+        if (portalObject == null)
+            return;
+
+        if (occupied)
+        {
+            if (!portalObjects.Contains(portalObject))
+                portalObjects.Add(portalObject);
+        }
+        else
+        {
+            portalObjects.Remove(portalObject);
+        }
+
+        RefreshPlacementEnabled();
     }
 
     public bool PlacePortal(Collider hitWall, Vector3 position,
@@ -542,7 +649,7 @@ public class Portal : MonoBehaviour
         }
 
         if (previousPlaced)
-            ClearPortalOccupants(previousWall);
+            ClearPortalOccupants();
 
         transform.position = testTransform.position;
         transform.rotation = testTransform.rotation;
@@ -1081,7 +1188,7 @@ public class Portal : MonoBehaviour
     {
         Collider ignoredWall = wallCollider;
         ReleaseWallCarve(this, ignoredWall);
-        ClearPortalOccupants(ignoredWall);
+        ClearPortalOccupants();
         wallCollider = null;
         attachmentTransform = null;
         isPlaced = false;
@@ -3261,16 +3368,16 @@ public class Portal : MonoBehaviour
                 a, d, c, b, normal, boxMin, boxSize);
     }
 
-    private void ClearPortalOccupants(Collider ignoredWall)
+    private void ClearPortalOccupants()
     {
         for (int i = 0; i < portalObjects.Count; ++i)
         {
             if (portalObjects[i] != null)
-                portalObjects[i].ExitPortal(ignoredWall);
+                portalObjects[i].ClearPortalOccupancy(this);
         }
         portalObjects.Clear();
         playerTriggerColliders.Clear();
-
+        placeEabled = true;
     }
 
     /// <summary>
@@ -3933,6 +4040,428 @@ public class Portal : MonoBehaviour
     }
 
     /// <summary>
+    /// Finds an active portal whose Source ghosting volume contains an
+    /// object's bounds. Source searches a sphere around the portal, then tests
+    /// the entity against the portal-hole volume and rejects entities too far
+    /// behind the portal plane. This is polled so a Rigidbody is not required.
+    /// </summary>
+    public static Portal FindPortalableObjectOccupancy(Bounds objectBounds)
+    {
+        Portal nearest = null;
+        float nearestDistance = float.PositiveInfinity;
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal candidate = ActivePortals[i];
+            if (candidate == null || !candidate.isPlaced ||
+                !HasActivePair(candidate) ||
+                candidate.portalCollider == null ||
+                !candidate.portalCollider.enabled)
+                continue;
+
+            Vector3 offset = objectBounds.center - candidate.transform.position;
+            float searchRadius = candidate.GetPortalHalfSizeWorld().y;
+            if (offset.sqrMagnitude > searchRadius * searchRadius)
+                continue;
+
+            Vector3 normal = GetPortalPlaneNormal(candidate);
+            float centerDistance = Vector3.Dot(offset, normal);
+            float normalExtent = ProjectHalfExtent(
+                normal,
+                Vector3.right,
+                Vector3.up,
+                Vector3.forward,
+                objectBounds.extents);
+            if (centerDistance < -SourceGhostBackSideLimit ||
+                centerDistance - normalExtent > -SourceGhostHoleFrontInset ||
+                centerDistance + normalExtent < -SourceGhostHoleDepth ||
+                !IsPortalableObjectInsideGhostHole(candidate, objectBounds))
+                continue;
+
+            float distance = offset.sqrMagnitude;
+            if (distance >= nearestDistance)
+                continue;
+
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+
+        return nearest;
+    }
+
+    private static bool IsPortalableObjectInsideGhostHole(
+        Portal portal,
+        Bounds objectBounds)
+    {
+        Vector3 halfSize = portal.GetPortalHalfSizeWorld() * 0.98f;
+        Vector3 offset = objectBounds.center - portal.transform.position;
+        float halfWidth = ProjectHalfExtent(
+            portal.transform.right,
+            Vector3.right,
+            Vector3.up,
+            Vector3.forward,
+            objectBounds.extents);
+        float halfHeight = ProjectHalfExtent(
+            portal.transform.up,
+            Vector3.right,
+            Vector3.up,
+            Vector3.forward,
+            objectBounds.extents);
+        float horizontalOffset = Vector3.Dot(offset, portal.transform.right);
+        float verticalOffset = Vector3.Dot(offset, portal.transform.up);
+
+        // CPortalSimulator builds the ghosting collision volume from a portal
+        // opening inset to 98% of its width and height. For regular props,
+        // Source tests their collision AABB against that volume.
+        return Mathf.Abs(horizontalOffset) <= halfSize.x + halfWidth &&
+            Mathf.Abs(verticalOffset) <= halfSize.y + halfHeight;
+    }
+
+    public static bool IsPortalPairActive(Portal portal)
+    {
+        return HasActivePair(portal);
+    }
+
+    /// <summary>
+    /// Applies the same entry-to-exit pose transform used by player movement.
+    /// </summary>
+    public static void TransformPortalPose(
+        Portal entry,
+        Portal exit,
+        Vector3 position,
+        Quaternion rotation,
+        out Vector3 transformedPosition,
+        out Quaternion transformedRotation)
+    {
+        if (!HasActivePair(entry) || exit != entry.otherPortal)
+        {
+            transformedPosition = position;
+            transformedRotation = rotation;
+            return;
+        }
+
+        Quaternion portalRotation = GetPortalRotation(entry, exit);
+        transformedPosition = MapPortalPoint(entry, exit, position);
+        transformedRotation = portalRotation * rotation;
+    }
+
+    /// <summary>
+    /// Detects a portalable object's swept bounds crossing the portal plane
+    /// and opening. If Item-layer registration missed the crossing, portal
+    /// ownership can recover the object while it remains inside the carved
+    /// recess. Local physics and portal-space sweeps resolve world contacts.
+    /// </summary>
+    public static bool TryHandlePortalableObjectMovement(
+        Vector3 previousBoundsCenter,
+        Vector3 currentBoundsCenter,
+        Vector3 boundsHalfExtents,
+        Portal portalEnvironment,
+        Portal recentlyExitedPortal,
+        ref Vector3 objectPosition,
+        ref Quaternion objectRotation,
+        out Portal entryPortal,
+        out Portal exitPortal,
+        out Quaternion portalRotation,
+        out float crossingFraction)
+    {
+        entryPortal = null;
+        exitPortal = null;
+        portalRotation = Quaternion.identity;
+        crossingFraction = 0f;
+
+        float nearestFraction = float.PositiveInfinity;
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal candidate = ActivePortals[i];
+            if (!HasActivePair(candidate))
+                continue;
+
+            Vector3 normal = GetPortalPlaneNormal(candidate);
+            float startDistance = Vector3.Dot(
+                previousBoundsCenter - candidate.transform.position, normal);
+            float endDistance = Vector3.Dot(
+                currentBoundsCenter - candidate.transform.position, normal);
+
+            float normalExtent = ProjectHalfExtent(
+                normal,
+                Vector3.right,
+                Vector3.up,
+                Vector3.forward,
+                boundsHalfExtents);
+            if (candidate == recentlyExitedPortal &&
+                endDistance <= PortalableObjectExitClearance + normalExtent)
+                continue;
+
+            float distanceTravelled = startDistance - endDistance;
+            bool crossedPlane = startDistance > 0.000001f &&
+                endDistance <= 0f && distanceTravelled > 0.000001f;
+            float missedCrossingDepth = normalExtent +
+                GetPortalRecessDepthWorld(candidate, SourcePlayerHalfHeightHu) +
+                PlayerCutoutTolerance;
+            bool recoveringMissedCrossing =
+                candidate == portalEnvironment &&
+                endDistance <= 0f &&
+                endDistance >= -missedCrossingDepth;
+            if (endDistance > 0f ||
+                (!crossedPlane && !recoveringMissedCrossing))
+                continue;
+
+            // Item-layer registration can happen after a fast physics step
+            // has already carried the object into the carved recess. Source
+            // keeps portal ownership while an entity is touching the portal;
+            // use that ownership to recover the missed centre crossing once,
+            // before the object reaches the blind-recess back cap.
+            float fraction = crossedPlane
+                ? startDistance / distanceTravelled
+                : 1f;
+            if (fraction < 0f || fraction > 1f ||
+                fraction >= nearestFraction)
+                continue;
+
+            Vector3 centerAtPlane = crossedPlane
+                ? Vector3.Lerp(
+                    previousBoundsCenter, currentBoundsCenter, fraction)
+                : currentBoundsCenter - normal * endDistance;
+            // Use the exact same overlap gate as player movement. The carved
+            // wall decides whether the object's real collider can reach the
+            // portal plane; requiring its conservative world AABB to fit the
+            // entire aperture rejects valid floor crossings and lets physics
+            // continue through the carved floor without teleporting.
+            if (!IsHullInsidePortalOpening(
+                candidate, centerAtPlane, boundsHalfExtents))
+                continue;
+
+            nearestFraction = fraction;
+            entryPortal = candidate;
+        }
+
+        if (entryPortal == null)
+            return false;
+
+        exitPortal = entryPortal.otherPortal;
+        portalRotation = GetPortalRotation(entryPortal, exitPortal);
+        crossingFraction = nearestFraction;
+        objectPosition = MapPortalPoint(
+            entryPortal, exitPortal, objectPosition);
+        objectRotation = portalRotation * objectRotation;
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the Source-style remote collision sweep for a portalable object.
+    /// While an object is touching an entry portal, Source simulates its
+    /// collision hull in the linked portal's world and maps the first contact
+    /// back to the object's current world. This lets a prop slide or stop on
+    /// remote geometry before its centre crosses the portal plane.
+    /// </summary>
+    public static bool TryGetPortalableObjectSpaceCollision(
+        Vector3 center,
+        Vector3 boundsHalfExtents,
+        Vector3 sweepDelta,
+        int layerMask,
+        Transform movingRoot,
+        Portal recentlyExitedPortal,
+        out RaycastHit nearest)
+    {
+        nearest = default;
+        if (sweepDelta.sqrMagnitude <= 0.000001f)
+            return false;
+
+        bool found = false;
+        float nearestDistance = float.PositiveInfinity;
+        for (int i = 0; i < ActivePortals.Count; ++i)
+        {
+            Portal entry = ActivePortals[i];
+            if (entry == recentlyExitedPortal)
+                continue;
+
+            RaycastHit candidate;
+            if (!TryGetPortalableObjectSpaceCollisionThroughPortal(
+                    entry,
+                    center,
+                    boundsHalfExtents,
+                    sweepDelta,
+                    layerMask,
+                    movingRoot,
+                    out candidate,
+                    false) ||
+                candidate.distance >= nearestDistance)
+                continue;
+
+            nearest = candidate;
+            nearestDistance = candidate.distance;
+            found = true;
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Sweeps a moving hull through an entry portal against colliders in the
+    /// linked world. The nearest hit is returned in entry-space so the caller
+    /// can resolve the remote contact as a local collision.
+    /// </summary>
+    private static bool TryGetPortalableObjectSpaceCollisionThroughPortal(
+        Portal entry,
+        Vector3 center,
+        Vector3 boundsHalfExtents,
+        Vector3 sweepDelta,
+        int layerMask,
+        Transform movingRoot,
+        out RaycastHit nearest,
+        bool portalableObjectsOnly)
+    {
+        nearest = default;
+        if (!HasActivePair(entry))
+            return false;
+
+        float localDistance = sweepDelta.magnitude;
+        if (localDistance <= 0.000001f)
+            return false;
+
+        Vector3 normal = GetPortalPlaneNormal(entry);
+        float startDistance = Vector3.Dot(
+            center - entry.transform.position, normal);
+        float deltaDistance = Vector3.Dot(sweepDelta, normal);
+        float normalExtent = ProjectHalfExtent(
+            normal,
+            Vector3.right,
+            Vector3.up,
+            Vector3.forward,
+            boundsHalfExtents);
+        if (deltaDistance >= -0.000001f ||
+            startDistance < -normalExtent - PlayerCutoutTolerance ||
+            startDistance + deltaDistance > normalExtent)
+            return false;
+
+        float planeFraction = Mathf.Clamp01(startDistance / -deltaDistance);
+        Vector3 centerAtPlane = center + sweepDelta * planeFraction;
+        if (!FitsPortalOpening(
+                entry,
+                centerAtPlane,
+                boundsHalfExtents,
+                Quaternion.identity,
+                SourcePortalBottomCarve))
+            return false;
+
+        Portal exit = entry.otherPortal;
+        Quaternion portalRotation = GetPortalRotation(entry, exit);
+        Vector3 remoteHalfExtents = TransformAabbHalfExtents(
+            boundsHalfExtents, portalRotation);
+        Vector3 remoteCenterAtPlane = MapPortalPoint(
+            entry, exit, centerAtPlane);
+        if (!FitsPortalOpening(
+                exit,
+                remoteCenterAtPlane,
+                remoteHalfExtents,
+                Quaternion.identity,
+                SourcePortalBottomCarve))
+            return false;
+
+        float remoteNormalExtent = ProjectHalfExtent(
+            GetPortalPlaneNormal(exit),
+            Vector3.right,
+            Vector3.up,
+            Vector3.forward,
+            remoteHalfExtents);
+        Vector3 remoteShift = GetPortalPlaneNormal(exit) *
+            (remoteNormalExtent - normalExtent);
+        Vector3 remoteStart = MapPortalPoint(entry, exit, center) +
+            remoteShift;
+        Vector3 remoteDelta = portalRotation * sweepDelta;
+        float remoteDistance = remoteDelta.magnitude;
+        if (remoteDistance <= 0.000001f)
+            return false;
+
+        int hitCount;
+        while (true)
+        {
+            hitCount = Physics.BoxCastNonAlloc(
+                remoteStart,
+                remoteHalfExtents,
+                remoteDelta / remoteDistance,
+                portalMovementHits,
+                Quaternion.identity,
+                remoteDistance,
+                layerMask,
+                QueryTriggerInteraction.Ignore);
+            if (hitCount < portalMovementHits.Length)
+                break;
+
+            System.Array.Resize(
+                ref portalMovementHits,
+                portalMovementHits.Length * 2);
+        }
+
+        Vector3 remoteEnd = remoteStart + remoteDelta;
+        bool found = false;
+        float nearestDistance = float.PositiveInfinity;
+        for (int i = 0; i < hitCount; ++i)
+        {
+            RaycastHit hit = portalMovementHits[i];
+            Collider collider = hit.collider;
+            if (collider == null ||
+                IsPortalOwnedCollider(collider) ||
+                (portalableObjectsOnly &&
+                 collider.GetComponentInParent<PortalableObject>() == null) ||
+                (movingRoot != null &&
+                 (collider.transform == movingRoot ||
+                  collider.transform.IsChildOf(movingRoot))))
+                continue;
+
+            // Source discards a remote trace that begins inside world
+            // geometry. This commonly occurs where a floor exit meets its
+            // host wall; after teleport, Unity's normal contact solver owns
+            // that overlap.
+            if (hit.distance <= RemoteStartSolidEpsilon)
+                continue;
+
+            if (IsPortalWallAtRemoteOpening(
+                    hit,
+                    exit,
+                    remoteStart,
+                    remoteHalfExtents,
+                    Quaternion.identity,
+                    remoteEnd))
+                continue;
+
+            float distance = hit.distance * (localDistance / remoteDistance);
+            if (distance >= nearestDistance)
+                continue;
+
+            hit.distance = distance;
+            hit.normal = Quaternion.Inverse(portalRotation) * hit.normal;
+            hit.point = MapPortalPoint(
+                exit,
+                entry,
+                hit.point - remoteShift);
+            nearest = hit;
+            nearestDistance = distance;
+            found = true;
+        }
+
+        return found;
+    }
+
+    public static Vector3 TransformAabbHalfExtents(
+        Vector3 halfExtents,
+        Quaternion rotation)
+    {
+        Vector3 right = rotation * Vector3.right;
+        Vector3 up = rotation * Vector3.up;
+        Vector3 forward = rotation * Vector3.forward;
+        return new Vector3(
+            Mathf.Abs(right.x) * halfExtents.x +
+                Mathf.Abs(up.x) * halfExtents.y +
+                Mathf.Abs(forward.x) * halfExtents.z,
+            Mathf.Abs(right.y) * halfExtents.x +
+                Mathf.Abs(up.y) * halfExtents.y +
+                Mathf.Abs(forward.y) * halfExtents.z,
+            Mathf.Abs(right.z) * halfExtents.x +
+                Mathf.Abs(up.z) * halfExtents.y +
+                Mathf.Abs(forward.z) * halfExtents.z);
+    }
+
+    /// <summary>
     /// Source traces the movement hull through the entry portal and into the
     /// linked portal's remote world. Return the remote hit in entry-space so
     /// the normal Source slide solver can resolve it as an ordinary collision.
@@ -4484,6 +5013,75 @@ public class Portal : MonoBehaviour
             upward * exitPortal.GetPortalHalfSizeWorld().y;
         Vector3 testBBoxPoint = exitCenter;
         testBBoxPoint.y -= playerHalfExtents.y;
+        Vector3 testToPerch = perch - testBBoxPoint;
+        Vector3 right = exitPortal.transform.right;
+        testToPerch -= Vector3.Dot(testToPerch, right) * right;
+
+        float horizontalDistance = Mathf.Sqrt(
+            testToPerch.x * testToPerch.x +
+            testToPerch.z * testToPerch.z);
+        float horizontalForward = Mathf.Sqrt(
+            forward.x * forward.x + forward.z * forward.z);
+        // SolveQuadratic(a, 0, c) with:
+        //   a = forward.y * -2 * (horizontalDistance * horizontalForward
+        //                        - testToPerch.y * forward.y)
+        //   c = horizontalDistance^2 * gravity
+        float a = (forward.y * -2f) *
+            ((horizontalDistance * horizontalForward) -
+             (testToPerch.y * forward.y));
+        float c = horizontalDistance * horizontalDistance * gravity;
+        float disc = -4f * a * c;
+        if (Mathf.Abs(a) < 0.000001f || disc < 0f)
+            return 0f;
+        float rootA = Mathf.Sqrt(disc) / (2f * a);
+        float rootB = -rootA;
+        float maxRoot = Mathf.Max(rootA, rootB);
+        if (maxRoot <= 0f)
+            return 0f;
+        return Mathf.Min(maxRoot, floorMinimum);
+    }
+
+    /// <summary>
+    /// Source's portal exit-speed calculation for a transported object. It
+    /// changes velocity only; the exit position stays the portal transform.
+    /// </summary>
+    public static float GetSourceMinimumPortalableExitSpeed(
+        Portal exitPortal,
+        Vector3 exitCenter,
+        Vector3 objectHalfExtents,
+        float gravityAcceleration)
+    {
+        Vector3 forward = GetPortalPlaneNormal(exitPortal);
+        if (forward.sqrMagnitude < 0.000001f)
+            return 0f;
+        forward.Normalize();
+
+        float floorMinimum =
+            300f / PortalTransformMath.HammerUnitsPerUnityUnit;
+        // Source uses Z as up; Unity uses Y. Portal-plane normal.y maps to
+        // Source normal.z. cos(30deg) is the "on floor" threshold.
+        const float cosPiOverSix = 0.8660254037844386f;
+        bool exitOnFloor = forward.y > cosPiOverSix;
+        if (exitOnFloor)
+            return floorMinimum;
+
+        // Only forward facing up by more than 30 degrees (m_vForward.z > 0.5)
+        // gets the perch computation; plain wall exits get no minimum.
+        if (forward.y <= 0.5f)
+            return 0f;
+
+        float gravity = gravityAcceleration > 0f
+            ? gravityAcceleration
+            : 800f / PortalTransformMath.HammerUnitsPerUnityUnit;
+
+        // prop_portal_shared.cpp:232-258: solve the ballistic minimum speed
+        // that lands the hull on the portal's bottom edge ("perch") instead
+        // of letting the ground be pulled out from under it.
+        Vector3 upward = exitPortal.transform.up;
+        Vector3 perch = exitPortal.transform.position -
+            upward * exitPortal.GetPortalHalfSizeWorld().y;
+        Vector3 testBBoxPoint = exitCenter;
+        testBBoxPoint.y -= objectHalfExtents.y;
         Vector3 testToPerch = perch - testBBoxPoint;
         Vector3 right = exitPortal.transform.right;
         testToPerch -= Vector3.Dot(testToPerch, right) * right;
