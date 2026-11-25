@@ -1044,21 +1044,91 @@ public class PortalableObject : MonoBehaviour
 
                 Vector3 colliderPosition =
                     objectCollider.transform.position + rootDelta;
-                if (Physics.ComputePenetration(
-                        objectCollider,
-                        colliderPosition,
-                        objectCollider.transform.rotation,
-                        other,
-                        other.transform.position,
-                        other.transform.rotation,
-                        out _,
-                        out float penetration) &&
-                    penetration > TransformCollisionSkin)
-                    return false;
+                bool objectColliderCanBeQueryShape =
+                    SupportsComputePenetration(objectCollider);
+                bool otherColliderCanBeQueryShape =
+                    SupportsComputePenetration(other);
+                if (objectColliderCanBeQueryShape ||
+                    otherColliderCanBeQueryShape)
+                {
+                    bool hasPenetration;
+                    float penetration;
+                    if (objectColliderCanBeQueryShape)
+                    {
+                        hasPenetration = Physics.ComputePenetration(
+                            objectCollider,
+                            colliderPosition,
+                            objectCollider.transform.rotation,
+                            other,
+                            other.transform.position,
+                            other.transform.rotation,
+                            out _,
+                            out penetration);
+                    }
+                    else
+                    {
+                        // Unity requires colliderA to be a supported shape.
+                        // Swap the pair when only the other collider qualifies;
+                        // the candidate object pose is then supplied as colliderB.
+                        hasPenetration = Physics.ComputePenetration(
+                            other,
+                            other.transform.position,
+                            other.transform.rotation,
+                            objectCollider,
+                            colliderPosition,
+                            objectCollider.transform.rotation,
+                            out _,
+                            out penetration);
+                    }
+
+                    if (hasPenetration &&
+                        penetration > TransformCollisionSkin)
+                        return false;
+                }
+                else
+                {
+                    // ComputePenetration cannot test two unsupported shapes
+                    // (for example, two non-convex MeshColliders). Do not
+                    // mistake that query limitation for an empty exit pose.
+                    Bounds candidateColliderBounds = objectCollider.bounds;
+                    candidateColliderBounds.center += rootDelta;
+                    if (HasAabbPenetration(
+                            candidateColliderBounds,
+                            other.bounds,
+                            TransformCollisionSkin))
+                        return false;
+                }
             }
         }
 
         return true;
+    }
+
+    private static bool SupportsComputePenetration(Collider collider)
+    {
+        if (collider is BoxCollider ||
+            collider is SphereCollider ||
+            collider is CapsuleCollider)
+            return true;
+
+        MeshCollider meshCollider = collider as MeshCollider;
+        return meshCollider != null && meshCollider.convex;
+    }
+
+    private static bool HasAabbPenetration(
+        Bounds a,
+        Bounds b,
+        float minimumDepth)
+    {
+        float overlapX = Mathf.Min(a.max.x, b.max.x) -
+            Mathf.Max(a.min.x, b.min.x);
+        float overlapY = Mathf.Min(a.max.y, b.max.y) -
+            Mathf.Max(a.min.y, b.min.y);
+        float overlapZ = Mathf.Min(a.max.z, b.max.z) -
+            Mathf.Max(a.min.z, b.min.z);
+        return overlapX > minimumDepth &&
+            overlapY > minimumDepth &&
+            overlapZ > minimumDepth;
     }
 
     private bool IsOwnCollider(Collider candidate)
