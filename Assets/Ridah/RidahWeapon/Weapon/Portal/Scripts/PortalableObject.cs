@@ -427,6 +427,13 @@ public class PortalableObject : MonoBehaviour
                 }
 
                 Physics.SyncTransforms();
+                currentPosition = FindSafePortalEntryRollbackPosition(
+                    entryPortal, currentPosition);
+                if (body != null)
+                    body.position = currentPosition;
+                else
+                    transform.position = currentPosition;
+                Physics.SyncTransforms();
                 bounds = GetObjectBounds();
                 UpdatePortalOccupancy(bounds);
             }
@@ -819,6 +826,52 @@ public class PortalableObject : MonoBehaviour
         }
 
         return false;
+    }
+
+    private Vector3 FindSafePortalEntryRollbackPosition(
+        Portal entryPortal,
+        Vector3 sourceRootPosition)
+    {
+        if (entryPortal == null)
+            return sourceRootPosition;
+
+        Vector3 entryNormal = Portal.GetPortalPlaneNormal(entryPortal);
+        if (entryNormal.sqrMagnitude < 0.000001f)
+            return sourceRootPosition;
+        entryNormal.Normalize();
+
+        Bounds sourceBounds = GetObjectBounds();
+        float centerDistance = Vector3.Dot(
+            sourceBounds.center - entryPortal.transform.position,
+            entryNormal);
+        float boundsExtentAlongNormal =
+            Mathf.Abs(entryNormal.x) * sourceBounds.extents.x +
+            Mathf.Abs(entryNormal.y) * sourceBounds.extents.y +
+            Mathf.Abs(entryNormal.z) * sourceBounds.extents.z;
+        float requiredBackoff = Mathf.Max(
+            0f,
+            boundsExtentAlongNormal + TransformCollisionSkin - centerDistance);
+        int firstDistanceHu = Mathf.CeilToInt(
+            requiredBackoff / HammerUnitScale);
+        int layerMask = GetTransformCollisionMask();
+
+        // Keep the complete object bounds on the source side and select a
+        // collision-free rollback point before releasing the blocked move.
+        for (int distanceHu = firstDistanceHu;
+             distanceHu <= firstDistanceHu + MaxPortalExitSearchDistanceHu;
+             ++distanceHu)
+        {
+            Vector3 candidateRootPosition = sourceRootPosition +
+                entryNormal * (distanceHu * HammerUnitScale);
+            if (IsPortalableObjectExitPoseClear(
+                    candidateRootPosition,
+                    sourceRootPosition,
+                    sourceBounds,
+                    layerMask))
+                return candidateRootPosition;
+        }
+
+        return sourceRootPosition;
     }
 
     private bool IsPortalableObjectExitPoseClear(

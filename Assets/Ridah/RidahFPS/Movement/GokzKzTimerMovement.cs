@@ -1574,8 +1574,8 @@ namespace RidahFPS.Controllers
                 if (!exitPoseIsSafe)
                 {
                     // No clear exit pose exists within the forward search.
-                    // Keep the player at the last source-side movement pose
-                    // and remove only velocity directed into the entry portal.
+                    // Back out until the whole hull is on the source side of
+                    // the entry plane, then remove only velocity directed in.
                     Vector3 blockedVelocity = velocityBeforePortal;
                     Vector3 entryNormal = entryPortal != null
                         ? Portal.GetPortalPlaneNormal(entryPortal)
@@ -1599,7 +1599,10 @@ namespace RidahFPS.Controllers
                                 entryNormal * inwardSpeed;
                     }
 
-                    portalPosition = _processStartPosition;
+                    portalPosition = FindSafePortalEntryRollbackPosition(
+                        entryPortal,
+                        _processStartPosition,
+                        GetBoxHalfExtents(_isCrouched));
                     _surfer.MoveData.playerTransform.position = portalPosition;
                     _surfer.MoveData.Origin = portalPosition;
                     _surfer.MoveData.Velocity = blockedVelocity;
@@ -4135,6 +4138,53 @@ namespace RidahFPS.Controllers
             }
 
             return false;
+        }
+
+        private Vector3 FindSafePortalEntryRollbackPosition(
+            Portal entryPortal,
+            Vector3 sourceRootPosition,
+            Vector3 halfExtents)
+        {
+            if (entryPortal == null)
+                return sourceRootPosition;
+
+            Vector3 normal = Portal.GetPortalPlaneNormal(entryPortal);
+            if (normal.sqrMagnitude < 0.000001f)
+                return sourceRootPosition;
+            normal.Normalize();
+
+            Vector3 center = sourceRootPosition +
+                _movementUp * halfExtents.y;
+            float centerDistance = Vector3.Dot(
+                center - entryPortal.transform.position, normal);
+            float hullExtentAlongNormal =
+                Mathf.Abs(normal.x) * halfExtents.x +
+                Mathf.Abs(normal.y) * halfExtents.y +
+                Mathf.Abs(normal.z) * halfExtents.z;
+            float requiredBackoff = Mathf.Max(
+                0f,
+                hullExtentAlongNormal + CollisionSkin - centerDistance);
+            int firstDistanceHu = Mathf.CeilToInt(
+                requiredBackoff / UnitScale);
+            int collisionMask = GetCollisionMask();
+
+            // Keep the entire hull clear of the entry plane, then make sure
+            // the rollback pose is also clear of source-side geometry.
+            for (int distanceHu = firstDistanceHu;
+                 distanceHu <= firstDistanceHu + 100;
+                 ++distanceHu)
+            {
+                Vector3 candidate = sourceRootPosition +
+                    normal * (distanceHu * UnitScale);
+                if (!IsHullStuckAt(
+                        candidate, halfExtents, out _, true,
+                        collisionMask))
+                    return candidate;
+            }
+
+            // The command start is the last known source-side pose if nearby
+            // geometry leaves no better rollback point.
+            return sourceRootPosition;
         }
 
         private bool TrySourceStuckRecovery()
