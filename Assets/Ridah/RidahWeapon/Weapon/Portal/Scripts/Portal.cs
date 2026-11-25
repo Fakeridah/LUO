@@ -4281,7 +4281,7 @@ public class Portal : MonoBehaviour
             return false;
 
         bool found = false;
-        float nearestDistance = float.PositiveInfinity;
+        float firstPortalFraction = float.PositiveInfinity;
         for (int i = 0; i < ActivePortals.Count; ++i)
         {
             Portal entry = ActivePortals[i];
@@ -4289,7 +4289,10 @@ public class Portal : MonoBehaviour
                 continue;
 
             RaycastHit candidate;
-            if (!TryGetPortalableObjectSpaceCollisionThroughPortal(
+            float crossingFraction;
+            bool crossesPortal;
+            bool hasRemoteHit =
+                TryGetPortalableObjectSpaceCollisionThroughPortal(
                     entry,
                     center,
                     boundsHalfExtents,
@@ -4297,13 +4300,18 @@ public class Portal : MonoBehaviour
                     layerMask,
                     movingRoot,
                     out candidate,
-                    false) ||
-                candidate.distance >= nearestDistance)
+                    out crossingFraction,
+                    out crossesPortal,
+                    false);
+            if (!crossesPortal || crossingFraction >= firstPortalFraction)
                 continue;
 
-            nearest = candidate;
-            nearestDistance = candidate.distance;
-            found = true;
+            // One movement sample can intersect several nearby portal planes.
+            // The movement solver teleports through only the first one, so a
+            // remote hit from a later portal is a different hypothetical path.
+            firstPortalFraction = crossingFraction;
+            found = hasRemoteHit;
+            nearest = hasRemoteHit ? candidate : default;
         }
 
         return found;
@@ -4322,9 +4330,13 @@ public class Portal : MonoBehaviour
         int layerMask,
         Transform movingRoot,
         out RaycastHit nearest,
+        out float portalCrossingFraction,
+        out bool crossesPortal,
         bool portalableObjectsOnly)
     {
         nearest = default;
+        portalCrossingFraction = float.PositiveInfinity;
+        crossesPortal = false;
         if (!HasActivePair(entry))
             return false;
 
@@ -4356,6 +4368,9 @@ public class Portal : MonoBehaviour
                 Quaternion.identity,
                 SourcePortalBottomCarve))
             return false;
+
+        portalCrossingFraction = planeFraction;
+        crossesPortal = true;
 
         Portal exit = entry.otherPortal;
         Quaternion portalRotation = GetPortalRotation(entry, exit);
