@@ -111,6 +111,11 @@ public class RecursivePortalCamera : MonoBehaviour
         BindMainViewTextures();
     }
 
+    private void LateUpdate()
+    {
+        UpdateCoincidentPortalVisuals();
+    }
+
     private void ResolveCameras()
     {
         if (mainCamera == null)
@@ -546,6 +551,7 @@ public class RecursivePortalCamera : MonoBehaviour
         RenderPipeline.endCameraRendering -= RestoreMainCameraAfterRender;
         if (Active == this)
             Active = null;
+        RestoreCoincidentPortalVisuals();
         DisablePortalNearPlaneCaps();
         RestoreMainCameraPose();
     }
@@ -682,6 +688,36 @@ public class RecursivePortalCamera : MonoBehaviour
         }
 
         UpdatePortalNearPlaneCaps();
+    }
+
+    private void UpdateCoincidentPortalVisuals()
+    {
+        int frontPortalIndex = 0;
+        bool fullyCoincident = mainCamera != null &&
+            ArePortalAperturesCoincident(mainCamera, out frontPortalIndex);
+
+        if (portals == null)
+            return;
+
+        for (int i = 0; i < PortalCount && i < portals.Length; ++i)
+        {
+            Portal portal = portals[i];
+            if (portal != null)
+                portal.SetCoincidentOverlapVisualsSuppressed(
+                    fullyCoincident && i != frontPortalIndex);
+        }
+    }
+
+    private void RestoreCoincidentPortalVisuals()
+    {
+        if (portals == null)
+            return;
+
+        for (int i = 0; i < PortalCount && i < portals.Length; ++i)
+        {
+            if (portals[i] != null)
+                portals[i].SetCoincidentOverlapVisualsSuppressed(false);
+        }
     }
 
     private void ApplyMainCameraPortalPose()

@@ -255,6 +255,9 @@ public class Portal : MonoBehaviour
     private Vector3 attachmentLocalPosition;
     private Quaternion attachmentLocalRotation;
     private Vector3 initialWorldScale;
+    private Renderer[] coincidentOverlapRenderers;
+    private bool[] coincidentOverlapRendererEnabledStates;
+    private bool coincidentOverlapVisualsSuppressed;
     private static RaycastHit[] portalMovementHits = new RaycastHit[32];
     private static Collider[] portalItemRegistrationHits = new Collider[32];
     private static int lastItemRegistrationSyncFrame = -1;
@@ -279,6 +282,7 @@ public class Portal : MonoBehaviour
         portalCollider = GetComponent<Collider>();
         Renderer = GetComponent<Renderer>();
         initialWorldScale = transform.lossyScale;
+        CacheCoincidentOverlapRenderers();
 
         // The portal surface/frame is visual in Source. Keep the root trigger
         // for portal occupancy, but do not let the decorative child meshes
@@ -303,6 +307,7 @@ public class Portal : MonoBehaviour
 
     private void OnDisable()
     {
+        SetCoincidentOverlapVisualsSuppressed(false);
         ActivePortals.Remove(this);
         ClearPortalOccupants();
 
@@ -391,6 +396,71 @@ public class Portal : MonoBehaviour
         }
 
         return fallback;
+    }
+
+    /// <summary>
+    /// The outline and placement effect are separate renderers from the portal
+    /// aperture. Hide the older portal's auxiliary visuals when both apertures
+    /// occupy the same space, then restore their authored enabled states when
+    /// the portals move apart.
+    /// </summary>
+    public void SetCoincidentOverlapVisualsSuppressed(bool suppressed)
+    {
+        if (coincidentOverlapVisualsSuppressed == suppressed)
+            return;
+
+        if (coincidentOverlapRenderers != null)
+        {
+            for (int i = 0; i < coincidentOverlapRenderers.Length; ++i)
+            {
+                Renderer target = coincidentOverlapRenderers[i];
+                if (target == null)
+                    continue;
+
+                if (suppressed)
+                {
+                    coincidentOverlapRendererEnabledStates[i] =
+                        target.enabled;
+                    target.enabled = false;
+                }
+                else
+                {
+                    target.enabled =
+                        coincidentOverlapRendererEnabledStates[i];
+                }
+            }
+        }
+
+        coincidentOverlapVisualsSuppressed = suppressed;
+    }
+
+    private void CacheCoincidentOverlapRenderers()
+    {
+        var renderers = new List<Renderer>(4);
+        if (outlineRenderer != null)
+            renderers.Add(outlineRenderer);
+
+        if (vfx != null)
+        {
+            Renderer[] effectRenderers =
+                vfx.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < effectRenderers.Length; ++i)
+            {
+                Renderer effectRenderer = effectRenderers[i];
+                if (effectRenderer != null && !renderers.Contains(effectRenderer))
+                    renderers.Add(effectRenderer);
+            }
+        }
+
+        coincidentOverlapRenderers = renderers.ToArray();
+        coincidentOverlapRendererEnabledStates =
+            new bool[coincidentOverlapRenderers.Length];
+        for (int i = 0; i < coincidentOverlapRenderers.Length; ++i)
+        {
+            Renderer target = coincidentOverlapRenderers[i];
+            coincidentOverlapRendererEnabledStates[i] =
+                target != null && target.enabled;
+        }
     }
 
     private static bool TryGetMaterialColor(
