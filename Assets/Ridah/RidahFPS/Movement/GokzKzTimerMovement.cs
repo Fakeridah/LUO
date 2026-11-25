@@ -1508,7 +1508,10 @@ namespace RidahFPS.Controllers
                 RemoveVerticalVelocity(ref _surfer.MoveData.Velocity);
 
             Vector3 baseVelocityBeforePortal = _baseVelocity;
+            Vector3 sourceTriggerBaseVelocityBeforePortal =
+                _sourceTriggerBaseVelocity;
             Vector3 portalVelocity = _surfer.MoveData.Velocity;
+            Vector3 velocityBeforePortal = portalVelocity;
             Vector3 portalPosition =
                 _surfer.MoveData.playerTransform.position;
             PortablePlayer portablePlayer =
@@ -1539,58 +1542,113 @@ namespace RidahFPS.Controllers
                 TickInterval,
                 out Quaternion portalRotation,
                 out bool forcePortalDuck,
+                out Portal entryPortal,
                 out Portal exitPortal,
                 out Vector3 transformedOldEyePosition))
             {
-                if (forcePortalDuck)
-                    ForcePortalCrouch();
-
-                _baseVelocity = portalRotation * baseVelocityBeforePortal;
-                _sourceTriggerBaseVelocity =
-                    portalRotation * _sourceTriggerBaseVelocity;
-                _surfer.MoveData.Velocity = portalVelocity;
-                _surfer.MoveData.Velocity.x = Mathf.Clamp(
-                    _surfer.MoveData.Velocity.x, -MaxVelocity, MaxVelocity);
-                _surfer.MoveData.Velocity.y = Mathf.Clamp(
-                    _surfer.MoveData.Velocity.y, -MaxVelocity, MaxVelocity);
-                _surfer.MoveData.Velocity.z = Mathf.Clamp(
-                    _surfer.MoveData.Velocity.z, -MaxVelocity, MaxVelocity);
-                _movementVelocity = _surfer.MoveData.Velocity;
-                _surfer.MoveData.playerTransform.position = portalPosition;
-                _surfer.MoveData.Origin = portalPosition;
-
-                // CPortal_Player::ApplyPortalTeleportation drops the entry
-                // ground entity after movement and carries the transformed
-                // base velocity into the next command.
-                Grounded = false;
-                _groundHit = default;
-                _groundNormal = _movementUp;
-                _surfer.MoveData.grounded = false;
-                _surfer.MoveData.groundTransform = null;
-                _surfer.MoveData.SurfaceFriction = 1f;
-                _hasGroundTransformSample = false;
-                _sampledGroundTransform = null;
-                _sampledGroundPosition = Vector3.zero;
-                _sampledGroundVelocity = Vector3.zero;
-                Physics.SyncTransforms();
-
-                // Source checks the new portal collision environment in the
-                // same command and moves a start-solid player to the nearest
-                // passable point. This is especially important for a CS:GO
-                // axis-aligned hull exiting near a portal edge.
-                if (TryRecoverPortalExit(
-                    exitPortal,
-                    ref portalPosition,
-                    GetBoxHalfExtents(_isCrouched)))
+                // Validate the mapped pose before committing the teleport.
+                // A full-height player may be forced to duck by the exit, so
+                // temporarily use the duck hull for the collision query and
+                // restore the source hull if the destination is blocked.
+                bool temporarilyDuckedHull = forcePortalDuck && !_isCrouched;
+                if (temporarilyDuckedHull)
                 {
-                    _surfer.MoveData.playerTransform.position = portalPosition;
-                    _surfer.MoveData.Origin = portalPosition;
+                    UpdateBoxCollider(true);
                     Physics.SyncTransforms();
                 }
 
-                portablePlayer.RecordPortalTransition(exitPortal);
-                portablePlayer.QueuePortalEyeOffset(
-                    transformedOldEyePosition);
+                TryRecoverPortalExit(
+                    exitPortal,
+                    ref portalPosition,
+                    forcePortalDuck
+                        ? GetBoxHalfExtents(true)
+                        : GetBoxHalfExtents(_isCrouched),
+                    out bool exitPoseIsSafe);
+
+                if (temporarilyDuckedHull)
+                {
+                    UpdateBoxCollider(false);
+                    Physics.SyncTransforms();
+                }
+
+                if (!exitPoseIsSafe)
+                {
+                    // No clear exit pose exists within the forward search.
+                    // Keep the player at the last source-side movement pose
+                    // and remove only velocity directed into the entry portal.
+                    Vector3 blockedVelocity = velocityBeforePortal;
+                    Vector3 entryNormal = entryPortal != null
+                        ? Portal.GetPortalPlaneNormal(entryPortal)
+                        : Vector3.zero;
+                    if (entryNormal.sqrMagnitude > 0.000001f)
+                    {
+                        entryNormal.Normalize();
+                        float inwardSpeed = Vector3.Dot(
+                            blockedVelocity, entryNormal);
+                        if (inwardSpeed < 0f)
+                            blockedVelocity -= entryNormal * inwardSpeed;
+
+                        inwardSpeed = Vector3.Dot(_baseVelocity, entryNormal);
+                        if (inwardSpeed < 0f)
+                            _baseVelocity -= entryNormal * inwardSpeed;
+
+                        inwardSpeed = Vector3.Dot(
+                            _sourceTriggerBaseVelocity, entryNormal);
+                        if (inwardSpeed < 0f)
+                            _sourceTriggerBaseVelocity -=
+                                entryNormal * inwardSpeed;
+                    }
+
+                    portalPosition = _processStartPosition;
+                    _surfer.MoveData.playerTransform.position = portalPosition;
+                    _surfer.MoveData.Origin = portalPosition;
+                    _surfer.MoveData.Velocity = blockedVelocity;
+                    _movementVelocity = blockedVelocity;
+                    Physics.SyncTransforms();
+                }
+                else
+                {
+                    if (forcePortalDuck)
+                        ForcePortalCrouch();
+
+                    _baseVelocity = portalRotation * baseVelocityBeforePortal;
+                    _sourceTriggerBaseVelocity =
+                        portalRotation * sourceTriggerBaseVelocityBeforePortal;
+                    _surfer.MoveData.Velocity = portalVelocity;
+                    _surfer.MoveData.Velocity.x = Mathf.Clamp(
+                        _surfer.MoveData.Velocity.x, -MaxVelocity, MaxVelocity);
+                    _surfer.MoveData.Velocity.y = Mathf.Clamp(
+                        _surfer.MoveData.Velocity.y, -MaxVelocity, MaxVelocity);
+                    _surfer.MoveData.Velocity.z = Mathf.Clamp(
+                        _surfer.MoveData.Velocity.z, -MaxVelocity, MaxVelocity);
+                    _movementVelocity = _surfer.MoveData.Velocity;
+                    _surfer.MoveData.playerTransform.position = portalPosition;
+                    _surfer.MoveData.Origin = portalPosition;
+
+                    // CPortal_Player::ApplyPortalTeleportation drops the entry
+                    // ground entity after movement and carries the transformed
+                    // base velocity into the next command.
+                    Grounded = false;
+                    _groundHit = default;
+                    _groundNormal = _movementUp;
+                    _surfer.MoveData.grounded = false;
+                    _surfer.MoveData.groundTransform = null;
+                    _surfer.MoveData.SurfaceFriction = 1f;
+                    _hasGroundTransformSample = false;
+                    _sampledGroundTransform = null;
+                    _sampledGroundPosition = Vector3.zero;
+                    _sampledGroundVelocity = Vector3.zero;
+                    Physics.SyncTransforms();
+
+                    if (portablePlayer != null)
+                    {
+                        Portal.CommitPlayerTeleport(
+                            portablePlayer, exitPortal, portalRotation);
+                        portablePlayer.RecordPortalTransition(exitPortal);
+                        portablePlayer.QueuePortalEyeOffset(
+                            transformedOldEyePosition);
+                    }
+                }
             }
 
             // Source calls CMoveHelperServer::ProcessImpacts after
@@ -3976,8 +4034,10 @@ namespace RidahFPS.Controllers
         private bool TryRecoverPortalExit(
             Portal exitPortal,
             ref Vector3 rootPosition,
-            Vector3 halfExtents)
+            Vector3 halfExtents,
+            out bool exitPoseIsSafe)
         {
+            exitPoseIsSafe = false;
             if (exitPortal == null)
                 return false;
 
@@ -4012,6 +4072,7 @@ namespace RidahFPS.Controllers
                         exitCollisionMask))
                 {
                     rootPosition = fittedRoot;
+                    exitPoseIsSafe = true;
                     return true;
                 }
             }
@@ -4025,7 +4086,10 @@ namespace RidahFPS.Controllers
             if (!IsHullStuckAt(
                     rootPosition, halfExtents, out _, true,
                     exitCollisionMask))
+            {
+                exitPoseIsSafe = true;
                 return false;
+            }
 
             Vector3 center = rootPosition + _movementUp * halfExtents.y;
             Vector3 normal = Portal.GetPortalPlaneNormal(exitPortal).normalized;
@@ -4042,6 +4106,7 @@ namespace RidahFPS.Controllers
                     exitCollisionMask))
             {
                 rootPosition = centeredRoot;
+                exitPoseIsSafe = true;
                 return true;
             }
 
@@ -4064,6 +4129,7 @@ namespace RidahFPS.Controllers
                         exitCollisionMask))
                 {
                     rootPosition = candidate;
+                    exitPoseIsSafe = true;
                     return true;
                 }
             }

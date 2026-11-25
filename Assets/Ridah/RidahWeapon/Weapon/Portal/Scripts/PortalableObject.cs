@@ -65,6 +65,8 @@ public class PortalableObject : MonoBehaviour
     private Portal recentExitPortal;
     private Vector3 previousBoundsCenter;
     private Vector3 previousBoundsExtents;
+    private Vector3 previousRootPosition;
+    private Quaternion previousRootRotation = Quaternion.identity;
     private bool hasPreviousPose;
 
     /// <summary>
@@ -215,6 +217,8 @@ public class PortalableObject : MonoBehaviour
         {
             previousBoundsCenter = bounds.center;
             previousBoundsExtents = bounds.extents;
+            previousRootPosition = currentPosition;
+            previousRootRotation = currentRotation;
             hasPreviousPose = true;
             return;
         }
@@ -293,6 +297,13 @@ public class PortalableObject : MonoBehaviour
 
         if (crossed)
         {
+            Vector3 sourceLinearVelocity = body != null
+                ? body.linearVelocity
+                : Vector3.zero;
+            Vector3 sourceAngularVelocity = body != null
+                ? body.angularVelocity
+                : Vector3.zero;
+
             if (body != null)
             {
                 body.position = transformedPosition;
@@ -355,16 +366,18 @@ public class PortalableObject : MonoBehaviour
             bool shouldRecoverExit = objectColliders.Length > 0 &&
                 (resolveTransformCollisions ||
                  (body != null && !body.isKinematic));
+            bool pushedForward = false;
+            bool exitWasBlocked = false;
             if (shouldRecoverExit)
             {
                 Bounds exitBounds = GetObjectBounds();
                 Vector3 recoveredPosition = currentPosition;
-                bool pushedForward = TryPushPortalableObjectOutOfExit(
+                pushedForward = TryPushPortalableObjectOutOfExit(
                     exitPortal,
                     currentPosition,
                     exitBounds,
                     ref recoveredPosition,
-                    out bool exitWasBlocked);
+                    out exitWasBlocked);
                 if (pushedForward)
                 {
                     currentPosition = recoveredPosition;
@@ -374,28 +387,63 @@ public class PortalableObject : MonoBehaviour
                         transform.position = currentPosition;
                     Physics.SyncTransforms();
                 }
-                else if (exitWasBlocked &&
-                         (body == null || body.isKinematic) &&
-                         resolveTransformCollisions &&
-                         !controllerHandlesCollision)
-                {
-                    // Retain the existing local depenetration fallback for
-                    // transform-driven props when the 100 HU forward search
-                    // could not find a clear candidate.
-                    ResolveExitPenetration(ref currentPosition);
-                    Physics.SyncTransforms();
-                }
             }
 
-            recentExitPortal = exitPortal;
-            OnPortalTeleported(entryPortal, exitPortal, portalRotation);
-            Teleported?.Invoke(entryPortal, exitPortal, portalRotation);
-            bounds = GetObjectBounds();
-            UpdatePortalOccupancy(bounds);
+            if (exitWasBlocked && !pushedForward)
+            {
+                // The exit remains solid after the forward search. Reject the
+                // crossing and restore the last source-side pose rather than
+                // leaving a Rigidbody or transform-driven prop embedded at
+                // the destination.
+                currentPosition = previousRootPosition;
+                currentRotation = previousRootRotation;
+                if (body != null)
+                {
+                    body.position = currentPosition;
+                    body.rotation = currentRotation;
+                    body.linearVelocity = sourceLinearVelocity;
+                    body.angularVelocity = sourceAngularVelocity;
+
+                    if (!body.isKinematic)
+                    {
+                        Vector3 entryNormal = entryPortal != null
+                            ? Portal.GetPortalPlaneNormal(entryPortal)
+                            : Vector3.zero;
+                        if (entryNormal.sqrMagnitude > 0.000001f)
+                        {
+                            entryNormal.Normalize();
+                            float inwardSpeed = Vector3.Dot(
+                                body.linearVelocity, entryNormal);
+                            if (inwardSpeed < 0f)
+                                body.linearVelocity -=
+                                    entryNormal * inwardSpeed;
+                        }
+                    }
+                }
+                else
+                {
+                    transform.SetPositionAndRotation(
+                        currentPosition, currentRotation);
+                }
+
+                Physics.SyncTransforms();
+                bounds = GetObjectBounds();
+                UpdatePortalOccupancy(bounds);
+            }
+            else
+            {
+                recentExitPortal = exitPortal;
+                OnPortalTeleported(entryPortal, exitPortal, portalRotation);
+                Teleported?.Invoke(entryPortal, exitPortal, portalRotation);
+                bounds = GetObjectBounds();
+                UpdatePortalOccupancy(bounds);
+            }
         }
 
         previousBoundsCenter = bounds.center;
         previousBoundsExtents = bounds.extents;
+        previousRootPosition = body != null ? body.position : transform.position;
+        previousRootRotation = body != null ? body.rotation : transform.rotation;
         hasPreviousPose = true;
     }
 
@@ -468,6 +516,8 @@ public class PortalableObject : MonoBehaviour
         Bounds bounds = GetObjectBounds();
         previousBoundsCenter = bounds.center;
         previousBoundsExtents = bounds.extents;
+        previousRootPosition = body != null ? body.position : transform.position;
+        previousRootRotation = body != null ? body.rotation : transform.rotation;
         hasPreviousPose = true;
     }
 

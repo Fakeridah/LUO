@@ -3801,11 +3801,13 @@ public class Portal : MonoBehaviour
         float frameTime,
         out Quaternion portalRotation,
         out bool forceDuck,
+        out Portal entryPortal,
         out Portal exitPortal,
         out Vector3 transformedOldEyePosition)
     {
         portalRotation = Quaternion.identity;
         forceDuck = false;
+        entryPortal = null;
         exitPortal = null;
         transformedOldEyePosition = Vector3.zero;
         if (player == null || movementUp.sqrMagnitude < 0.5f)
@@ -3816,7 +3818,6 @@ public class Portal : MonoBehaviour
         Vector3 previousCenter = previousRootPosition + centerOffset;
         Vector3 currentCenter = currentRootPosition + centerOffset;
         float nearestCrossing = float.PositiveInfinity;
-        Portal entryPortal = null;
         float crossingFraction = 0f;
 
         for (int i = 0; i < ActivePortals.Count; ++i)
@@ -3995,10 +3996,6 @@ public class Portal : MonoBehaviour
         transformedOldEyePosition = MapPortalPoint(
             entryPortal, exitPortal, player.GetMovementEyePosition());
         currentRootPosition = transformedRoot;
-        // The exit portal owns the player until the centre has moved clearly
-        // back onto its traversable side (see the crossing gate above).
-        s_recentExitPortal = exitPortal;
-
         // HandlePortalling removes the part of this command's gravity that
         // belongs after the crossing, rotates the pre-exit velocity, then
         // reapplies gravity in the destination world.
@@ -4025,11 +4022,10 @@ public class Portal : MonoBehaviour
             if (forwardSpeed < minimumExitSpeed)
                 velocity += exitForward * (minimumExitSpeed - forwardSpeed);
         }
-        player.ApplyPortalRotation(portalRotation);
         if (Time.unscaledTime - _lastCrossingLogTime >= 0.5f)
         {
             _lastCrossingLogTime = Time.unscaledTime;
-            Debug.Log("[PortalCross] TELEPORT " + entryPortal.name + " -> " +
+            Debug.Log("[PortalCross] MAPPED " + entryPortal.name + " -> " +
                 exitPortal.name + " root=" + currentRootPosition.ToString("F2") +
                 " vel=" + velocity.ToString("F2") +
                 " rot=" + portalRotation.eulerAngles.ToString("F1") +
@@ -4037,6 +4033,24 @@ public class Portal : MonoBehaviour
                 " exitRot=" + exitPortal.transform.eulerAngles.ToString("F1"));
         }
         return true;
+    }
+
+    /// <summary>
+    /// Commits player-only portal state after the movement controller has
+    /// confirmed the mapped exit pose is clear.
+    /// </summary>
+    public static void CommitPlayerTeleport(
+        PortablePlayer player,
+        Portal exitPortal,
+        Quaternion portalRotation)
+    {
+        if (player == null || exitPortal == null)
+            return;
+
+        // The exit portal owns the player until the centre has moved clearly
+        // back onto its traversable side (see TryHandlePlayerMovement).
+        s_recentExitPortal = exitPortal;
+        player.ApplyPortalRotation(portalRotation);
     }
 
     /// <summary>
