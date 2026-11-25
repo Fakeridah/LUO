@@ -87,6 +87,10 @@ public class RecursivePortalCamera : MonoBehaviour
     private bool mainCameraPoseOverridden;
     private Vector3 previousMainCameraLocalPosition;
     private Quaternion previousMainCameraLocalRotation;
+    private Transform viewModelRoot;
+    private bool viewModelPoseOverridden;
+    private Vector3 previousViewModelLocalPosition;
+    private Quaternion previousViewModelLocalRotation;
 
     private static readonly int MainTextureId = Shader.PropertyToID("_MainTex");
     private static readonly Quaternion PortalHalfTurn =
@@ -124,7 +128,14 @@ public class RecursivePortalCamera : MonoBehaviour
             mainCamera = Camera.main;
         if (portalCamera == null)
             portalCamera = GetComponentInChildren<Camera>(true);
-
+        if (viewModelRoot == null && mainCamera != null &&
+            mainCamera.transform.parent != null)
+        {
+            // Weapons are a sibling of the gameplay camera under CameraHolder.
+            // During a portal crossing the camera is rendered from a mapped
+            // pose, so the weapon root must receive the same render-only delta.
+            viewModelRoot = mainCamera.transform.parent.Find("Weapons");
+        }
     }
 
     private void CreateTerminalStaticTexture()
@@ -846,9 +857,29 @@ public class RecursivePortalCamera : MonoBehaviour
             return;
 
         Transform cameraTransform = mainCamera.transform;
+        Vector3 baseCameraPosition = cameraTransform.position;
+        Quaternion baseCameraRotation = cameraTransform.rotation;
+
         previousMainCameraLocalPosition = cameraTransform.localPosition;
         previousMainCameraLocalRotation = cameraTransform.localRotation;
         mainCameraPoseOverridden = true;
+
+        // The viewmodel lives outside the camera hierarchy. Apply the same
+        // rigid base-eye -> mapped-eye delta for this render frame only, so
+        // Source-style eye offset keeps the weapon attached to the view.
+        if (viewModelRoot != null)
+        {
+            Quaternion baseToView = viewRotation *
+                Quaternion.Inverse(baseCameraRotation);
+            previousViewModelLocalPosition = viewModelRoot.localPosition;
+            previousViewModelLocalRotation = viewModelRoot.localRotation;
+            viewModelPoseOverridden = true;
+            viewModelRoot.SetPositionAndRotation(
+                viewPosition + baseToView *
+                    (viewModelRoot.position - baseCameraPosition),
+                baseToView * viewModelRoot.rotation);
+        }
+
         cameraTransform.SetPositionAndRotation(viewPosition, viewRotation);
     }
 
@@ -865,6 +896,15 @@ public class RecursivePortalCamera : MonoBehaviour
 
     private void RestoreMainCameraPose()
     {
+        // Restore the viewmodel independently: a destroyed/cached camera must
+        // never leave the weapon root in a render-only mapped pose.
+        if (viewModelPoseOverridden && viewModelRoot != null)
+        {
+            viewModelRoot.localPosition = previousViewModelLocalPosition;
+            viewModelRoot.localRotation = previousViewModelLocalRotation;
+            viewModelPoseOverridden = false;
+        }
+
         if (!mainCameraPoseOverridden || mainCamera == null)
             return;
 

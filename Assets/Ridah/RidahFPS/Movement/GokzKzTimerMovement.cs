@@ -1320,20 +1320,38 @@ namespace RidahFPS.Controllers
                 CollisionSkin * CollisionSkin)
                 return false;
 
-            if (!Physics.ComputePenetration(
-                    _sourceHullCollider,
-                    basePosition,
-                    Quaternion.identity,
-                    collider,
-                    collider.transform.position,
-                    collider.transform.rotation,
-                    out Vector3 separationDirection,
-                    out float penetration) ||
-                penetration <= 0f ||
-                penetration > GetContactPenetrationTolerance(collider))
-                return false;
+            bool penetrating = Physics.ComputePenetration(
+                _sourceHullCollider,
+                basePosition,
+                Quaternion.identity,
+                collider,
+                collider.transform.position,
+                collider.transform.rotation,
+                out Vector3 separationDirection,
+                out float penetration);
 
-            contactNormal = separationDirection.normalized;
+            if (penetrating && penetration > 0f &&
+                penetration <= GetContactPenetrationTolerance(collider))
+            {
+                contactNormal = separationDirection.normalized;
+            }
+            else
+            {
+                // A BoxCast that starts flush against a vertical wall reports
+                // distance zero and fabricates a normal opposite the sweep:
+                // for a jump that is straight down, which TryPlayerMove reads
+                // as a ceiling and clips the upward velocity ("顶头"). The
+                // hull is only touching, so ComputePenetration has no usable
+                // depth. Reconstruct the real separating plane from the
+                // closest point just like the standability path does.
+                Vector3 hullCenter = basePosition + _movementUp * halfExtents.y;
+                Vector3 closestPoint = collider.ClosestPoint(hullCenter);
+                Vector3 separation = hullCenter - closestPoint;
+                if (separation.sqrMagnitude <= 0.00000001f)
+                    return false;
+                contactNormal = separation.normalized;
+            }
+
             nonBlockingContact = Vector3.Dot(
                 movementDelta.normalized, contactNormal) >= -0.0001f;
             return contactNormal.sqrMagnitude > 0.5f;

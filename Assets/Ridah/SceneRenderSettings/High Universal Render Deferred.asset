@@ -234,6 +234,21 @@ MonoBehaviour:
     TextureName: _MyTexture
     LightMode: 15
     GlobalShaderKeywords: []
+--- !u!114 &-3279646722199418053
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9f7102d38897f604a98754019a1ca55a, type: 3}
+  m_Name: ViewModelRendererFeature
+  m_EditorClassIdentifier: Assembly-CSharp::ViewModelRendererFeature
+  m_Active: 1
+  viewModelLayerName: ViewModel
+  viewModelNearClipPlane: 0.001
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -270,19 +285,20 @@ MonoBehaviour:
   - {fileID: -7306047785604170558}
   - {fileID: -3690972145036422227}
   - {fileID: -4103552297611982301}
+  - {fileID: -3279646722199418053}
   m_RendererFeatureMap: e4aac6ff68046f8aad548c8dbc60bb182dece56fc138a944ab8b7197bfc0ac69eff8d005030a22a8112e24ca908a628fd44ffc4bed2f76852a295bb858bccd27c2bc08833fb49b9aad133ec36308c7cc238a9947ed400dc7l
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   m_AssetVersion: 3
   m_PrepassLayerMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 4294950911
   m_OpaqueLayerMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 4294950911
   m_TransparentLayerMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 4294950911
   m_DefaultStencilState:
     overrideStencilState: 0
     stencilReference: 1
