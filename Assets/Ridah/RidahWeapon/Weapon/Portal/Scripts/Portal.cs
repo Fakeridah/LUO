@@ -648,6 +648,29 @@ public class Portal : MonoBehaviour
             return false;
         }
 
+        Portal overlappingCarvePortal;
+        if (TryFindOverlappingPortalCarve(
+                hitWall, out overlappingCarvePortal))
+        {
+            Debug.Log("[PortalPlace] rejected: carve volume overlaps " +
+                overlappingCarvePortal.name + " on " + hitWall.name +
+                " at=" + testTransform.position.ToString("F2"));
+            wallCollider = previousWall;
+            transform.SetParent(previousParent, true);
+            transform.SetPositionAndRotation(previousPosition, previousRotation);
+            transform.localScale = previousLocalScale;
+            attachmentTransform = previousAttachmentTransform;
+            attachmentLocalPosition = previousAttachmentLocalPosition;
+            attachmentLocalRotation = previousAttachmentLocalRotation;
+            isPlaced = previousPlaced;
+            placeEabled = previousPlaceEnabled;
+            if (!previousPlaced)
+                gameObject.SetActive(false);
+            else if (!gameObject.activeSelf)
+                gameObject.SetActive(previousActive);
+            return false;
+        }
+
         if (previousPlaced)
             ClearPortalOccupants();
 
@@ -679,6 +702,189 @@ public class Portal : MonoBehaviour
         placeEabled = true;
         SyncPairCarve();
         return true;
+    }
+
+    private bool TryFindOverlappingPortalCarve(
+        Collider candidateWall,
+        out Portal overlappingPortal)
+    {
+        overlappingPortal = null;
+        Collider hostCollider = ResolveCarveHostCollider(candidateWall);
+        Transform wallTransform;
+        Vector3 boxMin;
+        Vector3 boxMax;
+        if (hostCollider == null ||
+            !TryGetWallCarveBounds(
+                hostCollider, out wallTransform, out boxMin, out boxMax))
+            return false;
+
+        PortalHole candidateHole;
+        bool candidateHasAxisHole = TryGetPortalHoleBounds(
+            this, wallTransform, boxMin, boxMax, out candidateHole);
+        PortalHoleWorld candidateWorldHole;
+        bool candidateHasWorldHole = TryGetWorldHole(
+            this, wallTransform, boxMin, boxMax, out candidateWorldHole);
+        if (!candidateHasAxisHole && !candidateHasWorldHole)
+            return false;
+
+        Bounds candidateWorldBounds = candidateHasWorldHole
+            ? GetPortalHoleWorldBounds(candidateWorldHole)
+            : default;
+
+        for (int portalIndex = 0;
+             portalIndex < ActivePortals.Count;
+             ++portalIndex)
+        {
+            Portal other = ActivePortals[portalIndex];
+            if (other == null || other == this || !other.isPlaced ||
+                !other.isActiveAndEnabled || other.wallCollider == null)
+                continue;
+
+            Collider otherHost = ResolveCarveHostCollider(other.wallCollider);
+            if (otherHost == null ||
+                otherHost.gameObject != hostCollider.gameObject)
+                continue;
+
+            PortalHole otherHole;
+            bool otherHasAxisHole = TryGetPortalHoleBounds(
+                other, wallTransform, boxMin, boxMax, out otherHole);
+            if (candidateHasAxisHole && otherHasAxisHole)
+            {
+                if (PortalHoleBoundsOverlap(candidateHole, otherHole))
+                {
+                    overlappingPortal = other;
+                    return true;
+                }
+                continue;
+            }
+
+            PortalHoleWorld otherWorldHole;
+            if (candidateHasWorldHole && TryGetWorldHole(
+                    other, wallTransform, boxMin, boxMax, out otherWorldHole) &&
+                PortalHoleWorldBoundsOverlap(
+                    candidateWorldBounds,
+                    GetPortalHoleWorldBounds(otherWorldHole)))
+            {
+                overlappingPortal = other;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetWallCarveBounds(
+        Collider hostCollider,
+        out Transform wallTransform,
+        out Vector3 boxMin,
+        out Vector3 boxMax)
+    {
+        wallTransform = null;
+        boxMin = Vector3.zero;
+        boxMax = Vector3.zero;
+        if (hostCollider == null)
+            return false;
+
+        wallTransform = hostCollider.transform;
+        WallCarveState state;
+        if (CarvedWalls.TryGetValue(hostCollider.gameObject, out state))
+        {
+            wallTransform = state.SourceCollider != null
+                ? state.SourceCollider.transform
+                : wallTransform;
+            if (state.SourceBox != null)
+            {
+                boxMin = state.SourceBox.center - state.SourceBox.size * 0.5f;
+                boxMax = state.SourceBox.center + state.SourceBox.size * 0.5f;
+                return true;
+            }
+            if (state.SourceMesh != null)
+            {
+                boxMin = state.SourceMesh.bounds.min;
+                boxMax = state.SourceMesh.bounds.max;
+                return true;
+            }
+        }
+
+        BoxCollider boxCollider = hostCollider.GetComponent<BoxCollider>();
+        if (boxCollider != null)
+        {
+            boxMin = boxCollider.center - boxCollider.size * 0.5f;
+            boxMax = boxCollider.center + boxCollider.size * 0.5f;
+            return true;
+        }
+
+        MeshCollider meshCollider = hostCollider as MeshCollider;
+        if (meshCollider == null)
+            meshCollider = hostCollider.GetComponent<MeshCollider>();
+        if (meshCollider == null || meshCollider.sharedMesh == null)
+            return false;
+
+        boxMin = meshCollider.sharedMesh.bounds.min;
+        boxMax = meshCollider.sharedMesh.bounds.max;
+        return true;
+    }
+
+    private static bool PortalHoleBoundsOverlap(
+        PortalHole a,
+        PortalHole b)
+    {
+        const float minimumOverlap = 0.0005f;
+        return BoundsAxisOverlap(
+                a.Min.x, a.Max.x, b.Min.x, b.Max.x, minimumOverlap) &&
+            BoundsAxisOverlap(
+                a.Min.y, a.Max.y, b.Min.y, b.Max.y, minimumOverlap) &&
+            BoundsAxisOverlap(
+                a.Min.z, a.Max.z, b.Min.z, b.Max.z, minimumOverlap);
+    }
+
+    private static Bounds GetPortalHoleWorldBounds(PortalHoleWorld hole)
+    {
+        Bounds bounds = new Bounds(
+            HoleWorldPoint(hole, -hole.RightExtent, hole.BottomExtent, hole.Back),
+            Vector3.zero);
+        float[] rightValues = { -hole.RightExtent, hole.RightExtent };
+        float[] upValues = { hole.BottomExtent, hole.TopExtent };
+        float[] depthValues = { hole.Back, hole.Front };
+        for (int rightIndex = 0; rightIndex < rightValues.Length; ++rightIndex)
+        {
+            for (int upIndex = 0; upIndex < upValues.Length; ++upIndex)
+            {
+                for (int depthIndex = 0;
+                     depthIndex < depthValues.Length;
+                     ++depthIndex)
+                {
+                    bounds.Encapsulate(HoleWorldPoint(
+                        hole,
+                        rightValues[rightIndex],
+                        upValues[upIndex],
+                        depthValues[depthIndex]));
+                }
+            }
+        }
+        return bounds;
+    }
+
+    private static bool PortalHoleWorldBoundsOverlap(Bounds a, Bounds b)
+    {
+        const float minimumOverlap = 0.001f;
+        return BoundsAxisOverlap(
+                a.min.x, a.max.x, b.min.x, b.max.x, minimumOverlap) &&
+            BoundsAxisOverlap(
+                a.min.y, a.max.y, b.min.y, b.max.y, minimumOverlap) &&
+            BoundsAxisOverlap(
+                a.min.z, a.max.z, b.min.z, b.max.z, minimumOverlap);
+    }
+
+    private static bool BoundsAxisOverlap(
+        float aMin,
+        float aMax,
+        float bMin,
+        float bMax,
+        float minimumOverlap)
+    {
+        return Mathf.Min(aMax, bMax) - Mathf.Max(aMin, bMin) >
+            minimumOverlap;
     }
 
     /// <summary>
