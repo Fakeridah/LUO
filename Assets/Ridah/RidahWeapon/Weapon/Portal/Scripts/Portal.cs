@@ -648,29 +648,6 @@ public class Portal : MonoBehaviour
             return false;
         }
 
-        Portal overlappingCarvePortal;
-        if (TryFindOverlappingPortalCarve(
-                hitWall, out overlappingCarvePortal))
-        {
-            Debug.Log("[PortalPlace] rejected: carve volume overlaps " +
-                overlappingCarvePortal.name + " on " + hitWall.name +
-                " at=" + testTransform.position.ToString("F2"));
-            wallCollider = previousWall;
-            transform.SetParent(previousParent, true);
-            transform.SetPositionAndRotation(previousPosition, previousRotation);
-            transform.localScale = previousLocalScale;
-            attachmentTransform = previousAttachmentTransform;
-            attachmentLocalPosition = previousAttachmentLocalPosition;
-            attachmentLocalRotation = previousAttachmentLocalRotation;
-            isPlaced = previousPlaced;
-            placeEabled = previousPlaceEnabled;
-            if (!previousPlaced)
-                gameObject.SetActive(false);
-            else if (!gameObject.activeSelf)
-                gameObject.SetActive(previousActive);
-            return false;
-        }
-
         if (previousPlaced)
             ClearPortalOccupants();
 
@@ -702,189 +679,6 @@ public class Portal : MonoBehaviour
         placeEabled = true;
         SyncPairCarve();
         return true;
-    }
-
-    private bool TryFindOverlappingPortalCarve(
-        Collider candidateWall,
-        out Portal overlappingPortal)
-    {
-        overlappingPortal = null;
-        Collider hostCollider = ResolveCarveHostCollider(candidateWall);
-        Transform wallTransform;
-        Vector3 boxMin;
-        Vector3 boxMax;
-        if (hostCollider == null ||
-            !TryGetWallCarveBounds(
-                hostCollider, out wallTransform, out boxMin, out boxMax))
-            return false;
-
-        PortalHole candidateHole;
-        bool candidateHasAxisHole = TryGetPortalHoleBounds(
-            this, wallTransform, boxMin, boxMax, out candidateHole);
-        PortalHoleWorld candidateWorldHole;
-        bool candidateHasWorldHole = TryGetWorldHole(
-            this, wallTransform, boxMin, boxMax, out candidateWorldHole);
-        if (!candidateHasAxisHole && !candidateHasWorldHole)
-            return false;
-
-        Bounds candidateWorldBounds = candidateHasWorldHole
-            ? GetPortalHoleWorldBounds(candidateWorldHole)
-            : default;
-
-        for (int portalIndex = 0;
-             portalIndex < ActivePortals.Count;
-             ++portalIndex)
-        {
-            Portal other = ActivePortals[portalIndex];
-            if (other == null || other == this || !other.isPlaced ||
-                !other.isActiveAndEnabled || other.wallCollider == null)
-                continue;
-
-            Collider otherHost = ResolveCarveHostCollider(other.wallCollider);
-            if (otherHost == null ||
-                otherHost.gameObject != hostCollider.gameObject)
-                continue;
-
-            PortalHole otherHole;
-            bool otherHasAxisHole = TryGetPortalHoleBounds(
-                other, wallTransform, boxMin, boxMax, out otherHole);
-            if (candidateHasAxisHole && otherHasAxisHole)
-            {
-                if (PortalHoleBoundsOverlap(candidateHole, otherHole))
-                {
-                    overlappingPortal = other;
-                    return true;
-                }
-                continue;
-            }
-
-            PortalHoleWorld otherWorldHole;
-            if (candidateHasWorldHole && TryGetWorldHole(
-                    other, wallTransform, boxMin, boxMax, out otherWorldHole) &&
-                PortalHoleWorldBoundsOverlap(
-                    candidateWorldBounds,
-                    GetPortalHoleWorldBounds(otherWorldHole)))
-            {
-                overlappingPortal = other;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool TryGetWallCarveBounds(
-        Collider hostCollider,
-        out Transform wallTransform,
-        out Vector3 boxMin,
-        out Vector3 boxMax)
-    {
-        wallTransform = null;
-        boxMin = Vector3.zero;
-        boxMax = Vector3.zero;
-        if (hostCollider == null)
-            return false;
-
-        wallTransform = hostCollider.transform;
-        WallCarveState state;
-        if (CarvedWalls.TryGetValue(hostCollider.gameObject, out state))
-        {
-            wallTransform = state.SourceCollider != null
-                ? state.SourceCollider.transform
-                : wallTransform;
-            if (state.SourceBox != null)
-            {
-                boxMin = state.SourceBox.center - state.SourceBox.size * 0.5f;
-                boxMax = state.SourceBox.center + state.SourceBox.size * 0.5f;
-                return true;
-            }
-            if (state.SourceMesh != null)
-            {
-                boxMin = state.SourceMesh.bounds.min;
-                boxMax = state.SourceMesh.bounds.max;
-                return true;
-            }
-        }
-
-        BoxCollider boxCollider = hostCollider.GetComponent<BoxCollider>();
-        if (boxCollider != null)
-        {
-            boxMin = boxCollider.center - boxCollider.size * 0.5f;
-            boxMax = boxCollider.center + boxCollider.size * 0.5f;
-            return true;
-        }
-
-        MeshCollider meshCollider = hostCollider as MeshCollider;
-        if (meshCollider == null)
-            meshCollider = hostCollider.GetComponent<MeshCollider>();
-        if (meshCollider == null || meshCollider.sharedMesh == null)
-            return false;
-
-        boxMin = meshCollider.sharedMesh.bounds.min;
-        boxMax = meshCollider.sharedMesh.bounds.max;
-        return true;
-    }
-
-    private static bool PortalHoleBoundsOverlap(
-        PortalHole a,
-        PortalHole b)
-    {
-        const float minimumOverlap = 0.0005f;
-        return BoundsAxisOverlap(
-                a.Min.x, a.Max.x, b.Min.x, b.Max.x, minimumOverlap) &&
-            BoundsAxisOverlap(
-                a.Min.y, a.Max.y, b.Min.y, b.Max.y, minimumOverlap) &&
-            BoundsAxisOverlap(
-                a.Min.z, a.Max.z, b.Min.z, b.Max.z, minimumOverlap);
-    }
-
-    private static Bounds GetPortalHoleWorldBounds(PortalHoleWorld hole)
-    {
-        Bounds bounds = new Bounds(
-            HoleWorldPoint(hole, -hole.RightExtent, hole.BottomExtent, hole.Back),
-            Vector3.zero);
-        float[] rightValues = { -hole.RightExtent, hole.RightExtent };
-        float[] upValues = { hole.BottomExtent, hole.TopExtent };
-        float[] depthValues = { hole.Back, hole.Front };
-        for (int rightIndex = 0; rightIndex < rightValues.Length; ++rightIndex)
-        {
-            for (int upIndex = 0; upIndex < upValues.Length; ++upIndex)
-            {
-                for (int depthIndex = 0;
-                     depthIndex < depthValues.Length;
-                     ++depthIndex)
-                {
-                    bounds.Encapsulate(HoleWorldPoint(
-                        hole,
-                        rightValues[rightIndex],
-                        upValues[upIndex],
-                        depthValues[depthIndex]));
-                }
-            }
-        }
-        return bounds;
-    }
-
-    private static bool PortalHoleWorldBoundsOverlap(Bounds a, Bounds b)
-    {
-        const float minimumOverlap = 0.001f;
-        return BoundsAxisOverlap(
-                a.min.x, a.max.x, b.min.x, b.max.x, minimumOverlap) &&
-            BoundsAxisOverlap(
-                a.min.y, a.max.y, b.min.y, b.max.y, minimumOverlap) &&
-            BoundsAxisOverlap(
-                a.min.z, a.max.z, b.min.z, b.max.z, minimumOverlap);
-    }
-
-    private static bool BoundsAxisOverlap(
-        float aMin,
-        float aMax,
-        float bMin,
-        float bMax,
-        float minimumOverlap)
-    {
-        return Mathf.Min(aMax, bMax) - Mathf.Max(aMin, bMin) >
-            minimumOverlap;
     }
 
     /// <summary>
@@ -2499,6 +2293,9 @@ public class Portal : MonoBehaviour
         public Vector3 B;
         public Vector3 C;
         public Vector3 Normal;
+        // Caps belong to one opening. While merging overlapping openings,
+        // keep that opening's own boundary and clip only against the others.
+        public Portal Owner;
     }
 
     private static bool TryGetWorldHole(
@@ -2664,6 +2461,8 @@ public class Portal : MonoBehaviour
             for (int h = 0; h < holes.Count && pieces.Count > 0; ++h)
             {
                 PortalHoleWorld hole = holes[h];
+                if (triangle.Owner != null && triangle.Owner == hole.Owner)
+                    continue;
                 Vector3[] planePoints =
                 {
                     HoleWorldPoint(hole, hole.RightExtent, 0f, 0f),
@@ -2695,6 +2494,25 @@ public class Portal : MonoBehaviour
                             new List<List<Vector3>>();
                         for (int q = 0; q < pending.Count; ++q)
                         {
+                            bool coplanar = true;
+                            for (int v = 0; v < pending[q].Count; ++v)
+                            {
+                                if (Mathf.Abs(Vector3.Dot(
+                                        pending[q][v] - planePoints[plane],
+                                        outward[plane])) > 0.000001f)
+                                {
+                                    coplanar = false;
+                                    break;
+                                }
+                            }
+                            if (coplanar)
+                            {
+                                // A source surface on the carve boundary is
+                                // removed with the opening instead of becoming
+                                // a false floor at the edge of a through-hole.
+                                stillInside.Add(pending[q]);
+                                continue;
+                            }
                             List<Vector3> outsidePart =
                                 ClipPolygonToPlaneWorld(
                                     pending[q], planePoints[plane],
@@ -2727,7 +2545,8 @@ public class Portal : MonoBehaviour
                         A = polygon[0],
                         B = polygon[i],
                         C = polygon[i + 1],
-                        Normal = triangle.Normal
+                        Normal = triangle.Normal,
+                        Owner = triangle.Owner
                     });
                 }
             }
@@ -2741,7 +2560,8 @@ public class Portal : MonoBehaviour
         Vector3 b,
         Vector3 c,
         Vector3 d,
-        Vector3 normal)
+        Vector3 normal,
+        Portal owner)
     {
         if (Vector3.Dot(Vector3.Cross(b - a, c - a), normal) < 0f)
         {
@@ -2749,8 +2569,14 @@ public class Portal : MonoBehaviour
             b = d;
             d = swap;
         }
-        output.Add(new CarveTriangle { A = a, B = b, C = c, Normal = normal });
-        output.Add(new CarveTriangle { A = a, B = c, C = d, Normal = normal });
+        output.Add(new CarveTriangle
+        {
+            A = a, B = b, C = c, Normal = normal, Owner = owner
+        });
+        output.Add(new CarveTriangle
+        {
+            A = a, B = c, C = d, Normal = normal, Owner = owner
+        });
     }
 
     private static void AppendWorldHoleCaps(
@@ -2769,22 +2595,22 @@ public class Portal : MonoBehaviour
             HoleWorldPoint(hole, r, bottom, front),
             HoleWorldPoint(hole, r, top, front),
             HoleWorldPoint(hole, r, top, back),
-            HoleWorldPoint(hole, r, bottom, back), -hole.Right);
+            HoleWorldPoint(hole, r, bottom, back), -hole.Right, hole.Owner);
         AppendWorldQuad(output,
             HoleWorldPoint(hole, -r, top, front),
             HoleWorldPoint(hole, -r, bottom, front),
             HoleWorldPoint(hole, -r, bottom, back),
-            HoleWorldPoint(hole, -r, top, back), hole.Right);
+            HoleWorldPoint(hole, -r, top, back), hole.Right, hole.Owner);
         AppendWorldQuad(output,
             HoleWorldPoint(hole, -r, top, front),
             HoleWorldPoint(hole, r, top, front),
             HoleWorldPoint(hole, r, top, back),
-            HoleWorldPoint(hole, -r, top, back), -hole.Up);
+            HoleWorldPoint(hole, -r, top, back), -hole.Up, hole.Owner);
         AppendWorldQuad(output,
             HoleWorldPoint(hole, r, bottom, front),
             HoleWorldPoint(hole, -r, bottom, front),
             HoleWorldPoint(hole, -r, bottom, back),
-            HoleWorldPoint(hole, r, bottom, back), hole.Up);
+            HoleWorldPoint(hole, r, bottom, back), hole.Up, hole.Owner);
 
         // The recess is blind, so it needs its own bottom cap. This is what
         // the hull actually stands on inside the recess, and it sits deep
@@ -2796,8 +2622,110 @@ public class Portal : MonoBehaviour
                 HoleWorldPoint(hole, -r, bottom, back),
                 HoleWorldPoint(hole, r, bottom, back),
                 HoleWorldPoint(hole, r, top, back),
-                HoleWorldPoint(hole, -r, top, back), hole.Normal);
+                HoleWorldPoint(hole, -r, top, back), hole.Normal,
+                hole.Owner);
         }
+    }
+
+    private static bool TryBuildWorldHoleUnionCaps(
+        List<PortalHoleWorld> worldHoles,
+        out List<CarveTriangle> worldCaps)
+    {
+        worldCaps = new List<CarveTriangle>();
+        if (worldHoles == null || worldHoles.Count == 0)
+            return false;
+
+        PortalHoleWorld first = worldHoles[0];
+        Vector3 basisOrigin = first.Origin;
+        Vector3 basisRight = first.Right.normalized;
+        Vector3 basisUp = first.Up.normalized;
+        Vector3 basisNormal = first.Normal.normalized;
+        const float alignmentTolerance = 0.999f;
+        if (Mathf.Abs(Vector3.Dot(basisRight, basisUp)) > 0.001f ||
+            Mathf.Abs(Vector3.Dot(basisRight, basisNormal)) > 0.001f ||
+            Mathf.Abs(Vector3.Dot(basisUp, basisNormal)) > 0.001f)
+            return false;
+
+        List<PortalHole> localHoles = new List<PortalHole>(worldHoles.Count);
+        for (int h = 0; h < worldHoles.Count; ++h)
+        {
+            PortalHoleWorld source = worldHoles[h];
+            Vector3 sourceRight = source.Right.normalized;
+            Vector3 sourceUp = source.Up.normalized;
+            Vector3 sourceNormal = source.Normal.normalized;
+            if (Mathf.Abs(Vector3.Dot(basisRight, sourceRight)) <
+                    alignmentTolerance ||
+                Mathf.Abs(Vector3.Dot(basisUp, sourceUp)) <
+                    alignmentTolerance ||
+                Mathf.Abs(Vector3.Dot(basisNormal, sourceNormal)) <
+                    alignmentTolerance)
+                return false;
+
+            Vector3 min = new Vector3(
+                float.PositiveInfinity, float.PositiveInfinity,
+                float.PositiveInfinity);
+            Vector3 max = new Vector3(
+                float.NegativeInfinity, float.NegativeInfinity,
+                float.NegativeInfinity);
+            float[] rightValues =
+                { -source.RightExtent, source.RightExtent };
+            float[] upValues =
+                { source.BottomExtent, source.TopExtent };
+            float[] depthValues = { source.Front, source.Back };
+            for (int r = 0; r < rightValues.Length; ++r)
+            {
+                for (int u = 0; u < upValues.Length; ++u)
+                {
+                    for (int d = 0; d < depthValues.Length; ++d)
+                    {
+                        Vector3 point = HoleWorldPoint(
+                            source, rightValues[r], upValues[u],
+                            depthValues[d]);
+                        Vector3 relative = point - basisOrigin;
+                        Vector3 local = new Vector3(
+                            Vector3.Dot(relative, basisRight),
+                            Vector3.Dot(relative, basisUp),
+                            Vector3.Dot(relative, basisNormal));
+                        min = Vector3.Min(min, local);
+                        max = Vector3.Max(max, local);
+                    }
+                }
+            }
+
+            localHoles.Add(new PortalHole
+            {
+                Owner = source.Owner,
+                Axis = 2,
+                A = 0,
+                B = 1,
+                Min = min,
+                Max = max,
+                BackAxis = Vector3.Dot(
+                    source.Origin - basisOrigin, basisNormal),
+                BackNormalSign = Vector3.Dot(
+                    sourceNormal, basisNormal) >= 0f ? 1f : -1f,
+                Through = source.Through
+            });
+        }
+
+        List<CarveTriangle> localCaps = BuildLocalHoleUnionCaps(localHoles);
+        for (int i = 0; i < localCaps.Count; ++i)
+        {
+            CarveTriangle cap = localCaps[i];
+            worldCaps.Add(new CarveTriangle
+            {
+                A = basisOrigin + basisRight * cap.A.x +
+                    basisUp * cap.A.y + basisNormal * cap.A.z,
+                B = basisOrigin + basisRight * cap.B.x +
+                    basisUp * cap.B.y + basisNormal * cap.B.z,
+                C = basisOrigin + basisRight * cap.C.x +
+                    basisUp * cap.C.y + basisNormal * cap.C.z,
+                Normal = (basisRight * cap.Normal.x +
+                    basisUp * cap.Normal.y +
+                    basisNormal * cap.Normal.z).normalized
+            });
+        }
+        return true;
     }
 
     private static bool BuildWorldCarvedMesh(
@@ -2900,8 +2828,22 @@ public class Portal : MonoBehaviour
         }
 
         List<CarveTriangle> carved = CarveTrianglesWorld(source, holes);
-        for (int h = 0; h < holes.Count; ++h)
-            AppendWorldHoleCaps(carved, holes[h]);
+        List<CarveTriangle> unionCaps;
+        if (TryBuildWorldHoleUnionCaps(holes, out unionCaps))
+        {
+            carved.AddRange(unionCaps);
+        }
+        else
+        {
+            // Non-parallel openings cannot use the axis grid. Keep the
+            // portal-aligned clipping path for those uncommon intersections.
+            for (int h = 0; h < holes.Count; ++h)
+            {
+                List<CarveTriangle> caps = new List<CarveTriangle>(10);
+                AppendWorldHoleCaps(caps, holes[h]);
+                carved.AddRange(CarveTrianglesWorld(caps, holes));
+            }
+        }
         if (carved.Count == 0)
             return false;
 
@@ -3241,6 +3183,26 @@ public class Portal : MonoBehaviour
                             new List<List<Vector3>>();
                         for (int q = 0; q < pending.Count; ++q)
                         {
+                            bool coplanar = true;
+                            for (int v = 0; v < pending[q].Count; ++v)
+                            {
+                                if (Mathf.Abs(
+                                        pending[q][v][coords[plane]] -
+                                        values[plane]) > 0.000001f)
+                                {
+                                    coplanar = false;
+                                    break;
+                                }
+                            }
+                            if (coplanar)
+                            {
+                                // A source face exactly on a carve boundary
+                                // belongs to the removed volume. Keeping it
+                                // as both inside and outside leaves a false
+                                // floor across through-holes.
+                                nextPending.Add(pending[q]);
+                                continue;
+                            }
                             List<Vector3> outside = ClipPolygonToHalfPlane(
                                 pending[q], coords[plane], values[plane],
                                 keepGreater[plane]);
@@ -3269,38 +3231,16 @@ public class Portal : MonoBehaviour
             }
         }
 
-        // The source surface now has a pocket-shaped gap. Close it into a real
-        // blind recess: four side walls from the traversable face down to the
-        // recess depth, plus a floor quad at that depth. The floor is what
-        // stops the hull and what keeps the reverse side from being a way in.
-        for (int h = 0; h < holes.Count; ++h)
+        // The source surface now has a pocket-shaped gap. Extract the boundary
+        // of the union of all opening volumes, so overlap regions contain no
+        // internal side walls and shared outer walls are emitted only once.
+        List<CarveTriangle> unionCaps = BuildLocalHoleUnionCaps(holes);
+        for (int i = 0; i < unionCaps.Count; ++i)
         {
-            PortalHole hole = holes[h];
-            float axisMin = hole.Min[hole.Axis];
-            float axisMax = hole.Max[hole.Axis];
-            float aMin = hole.Min[hole.A];
-            float aMax = hole.Max[hole.A];
-            float bMin = hole.Min[hole.B];
-            float bMax = hole.Max[hole.B];
-
-            AppendHoleCapA(vertices, normals, uvs, triangles,
-                hole, axisMin, axisMax, aMin, bMin, bMax, true,
-                boxMin, boxSize);
-            AppendHoleCapA(vertices, normals, uvs, triangles,
-                hole, axisMin, axisMax, aMax, bMin, bMax, false,
-                boxMin, boxSize);
-            AppendHoleCapB(vertices, normals, uvs, triangles,
-                hole, aMin, aMax, axisMin, axisMax, hole.Min[hole.B], false,
-                boxMin, boxSize);
-            AppendHoleCapB(vertices, normals, uvs, triangles,
-                hole, aMin, aMax, axisMin, axisMax, hole.Max[hole.B], true,
-                boxMin, boxSize);
-            // Blind recess for every orientation, a floor included: the cap
-            // sits at the recess depth, which is the hull's support distance
-            // plus forgiveness, so the centre still crosses the plane.
-            if (!hole.Through)
-                AppendHoleFloor(vertices, normals, uvs, triangles,
-                    hole, boxMin, boxSize);
+            CarveTriangle cap = unionCaps[i];
+            AppendCarvedTriangle(
+                vertices, normals, uvs, triangles,
+                cap.A, cap.B, cap.C, cap.Normal, boxMin, boxSize);
         }
 
         // No back cap: the carve is now a blind recess from the traversable
@@ -3572,6 +3512,195 @@ public class Portal : MonoBehaviour
         else
             AppendCarvedFace(vertices, normals, uvs, triangles,
                 a, d, c, b, normal, boxMin, boxSize);
+    }
+
+    private static List<CarveTriangle> BuildLocalHoleUnionCaps(
+        List<PortalHole> holes)
+    {
+        List<CarveTriangle> caps = new List<CarveTriangle>();
+        if (holes == null || holes.Count == 0)
+            return caps;
+
+        List<float>[] cuts =
+        {
+            new List<float>(), new List<float>(), new List<float>()
+        };
+        for (int h = 0; h < holes.Count; ++h)
+        {
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                cuts[axis].Add(holes[h].Min[axis]);
+                cuts[axis].Add(holes[h].Max[axis]);
+            }
+        }
+
+        const float epsilon = 0.00001f;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            cuts[axis].Sort();
+            for (int i = cuts[axis].Count - 1; i > 0; --i)
+            {
+                if (cuts[axis][i] - cuts[axis][i - 1] <= epsilon)
+                    cuts[axis].RemoveAt(i);
+            }
+        }
+
+        int nx = cuts[0].Count - 1;
+        int ny = cuts[1].Count - 1;
+        int nz = cuts[2].Count - 1;
+        if (nx <= 0 || ny <= 0 || nz <= 0)
+            return caps;
+
+        bool[,,] insideUnion = new bool[nx, ny, nz];
+        for (int x = 0; x < nx; ++x)
+        {
+            for (int y = 0; y < ny; ++y)
+            {
+                for (int z = 0; z < nz; ++z)
+                {
+                    Vector3 center = new Vector3(
+                        (cuts[0][x] + cuts[0][x + 1]) * 0.5f,
+                        (cuts[1][y] + cuts[1][y + 1]) * 0.5f,
+                        (cuts[2][z] + cuts[2][z + 1]) * 0.5f);
+                    for (int h = 0; h < holes.Count; ++h)
+                    {
+                        if (center.x >= holes[h].Min.x &&
+                            center.x <= holes[h].Max.x &&
+                            center.y >= holes[h].Min.y &&
+                            center.y <= holes[h].Max.y &&
+                            center.z >= holes[h].Min.z &&
+                            center.z <= holes[h].Max.z)
+                        {
+                            insideUnion[x, y, z] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (int x = 0; x < nx; ++x)
+        {
+            for (int y = 0; y < ny; ++y)
+            {
+                for (int z = 0; z < nz; ++z)
+                {
+                    if (!insideUnion[x, y, z])
+                        continue;
+
+                    Vector3 cellCenter = new Vector3(
+                        (cuts[0][x] + cuts[0][x + 1]) * 0.5f,
+                        (cuts[1][y] + cuts[1][y + 1]) * 0.5f,
+                        (cuts[2][z] + cuts[2][z + 1]) * 0.5f);
+                    for (int axis = 0; axis < 3; ++axis)
+                    {
+                        for (int direction = -1;
+                             direction <= 1;
+                             direction += 2)
+                        {
+                            int nxCell = x + (axis == 0 ? direction : 0);
+                            int nyCell = y + (axis == 1 ? direction : 0);
+                            int nzCell = z + (axis == 2 ? direction : 0);
+                            bool neighborInside = nxCell >= 0 && nxCell < nx &&
+                                nyCell >= 0 && nyCell < ny &&
+                                nzCell >= 0 && nzCell < nz &&
+                                insideUnion[nxCell, nyCell, nzCell];
+                            if (neighborInside)
+                                continue;
+
+                            int axisCell = axis == 0 ? x : axis == 1 ? y : z;
+                            float faceValue = direction > 0
+                                ? cuts[axis][axisCell + 1]
+                                : cuts[axis][axisCell];
+                            Vector3 normal = AxisDirection(axis) * -direction;
+                            if (!ShouldEmitLocalHoleUnionFace(
+                                    holes, cellCenter, axis, faceValue,
+                                    normal, epsilon))
+                                continue;
+
+                            int uAxis = (axis + 1) % 3;
+                            int vAxis = (axis + 2) % 3;
+                            int uCell = uAxis == 0 ? x : uAxis == 1 ? y : z;
+                            int vCell = vAxis == 0 ? x : vAxis == 1 ? y : z;
+                            Vector3 p0 = cellCenter;
+                            p0[axis] = faceValue;
+                            p0[uAxis] = cuts[uAxis][uCell];
+                            p0[vAxis] = cuts[vAxis][vCell];
+                            Vector3 p1 = p0;
+                            p1[uAxis] = cuts[uAxis][uCell + 1];
+                            Vector3 p2 = p1;
+                            p2[vAxis] = cuts[vAxis][vCell + 1];
+                            Vector3 p3 = p0;
+                            p3[vAxis] = cuts[vAxis][vCell + 1];
+                            AppendCarvedQuadTriangles(
+                                caps, p0, p1, p2, p3, normal);
+                        }
+                    }
+                }
+            }
+        }
+        return caps;
+    }
+
+    private static void AppendCarvedQuadTriangles(
+        List<CarveTriangle> output,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector3 d,
+        Vector3 normal)
+    {
+        if (Vector3.Dot(Vector3.Cross(b - a, c - a), normal) < 0f)
+        {
+            Vector3 swap = b;
+            b = d;
+            d = swap;
+        }
+        output.Add(new CarveTriangle { A = a, B = b, C = c, Normal = normal });
+        output.Add(new CarveTriangle { A = a, B = c, C = d, Normal = normal });
+    }
+
+    private static bool ShouldEmitLocalHoleUnionFace(
+        List<PortalHole> holes,
+        Vector3 cellCenter,
+        int faceAxis,
+        float faceValue,
+        Vector3 normal,
+        float epsilon)
+    {
+        bool insideAtLeastOneHole = false;
+        bool sideBoundary = false;
+        bool blindBackBoundary = false;
+
+        for (int h = 0; h < holes.Count; ++h)
+        {
+            PortalHole hole = holes[h];
+            if (cellCenter.x < hole.Min.x || cellCenter.x > hole.Max.x ||
+                cellCenter.y < hole.Min.y || cellCenter.y > hole.Max.y ||
+                cellCenter.z < hole.Min.z || cellCenter.z > hole.Max.z)
+                continue;
+
+            insideAtLeastOneHole = true;
+            if (hole.Axis != faceAxis)
+            {
+                sideBoundary = true;
+                continue;
+            }
+
+            if (hole.Through ||
+                Mathf.Abs(faceValue - hole.BackAxis) <= epsilon)
+                continue;
+
+            float backFace = hole.BackNormalSign > 0f
+                ? hole.Min[faceAxis]
+                : hole.Max[faceAxis];
+            if (Mathf.Abs(faceValue - backFace) <= epsilon &&
+                Vector3.Dot(normal,
+                    AxisDirection(faceAxis) * hole.BackNormalSign) > 0.9f)
+                blindBackBoundary = true;
+        }
+
+        return insideAtLeastOneHole && (sideBoundary || blindBackBoundary);
     }
 
     private void ClearPortalOccupants()
