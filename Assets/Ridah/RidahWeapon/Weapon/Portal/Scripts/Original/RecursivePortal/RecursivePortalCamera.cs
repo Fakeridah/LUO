@@ -70,6 +70,8 @@ public class RecursivePortalCamera : MonoBehaviour
     private readonly List<Vector2> nearCapScreenPolygon = new List<Vector2>(12);
     private readonly List<int> nearCapTriangles = new List<int>(48);
     private readonly List<Vector3> apertureCorners = new List<Vector3>(4);
+    private readonly Vector3[] overlapApertureCorners0 = new Vector3[4];
+    private readonly Vector3[] overlapApertureCorners1 = new Vector3[4];
     private readonly List<Vector3> portalFrustumPolygon =
         new List<Vector3>(12);
     private readonly List<Vector3> portalFrustumScratch =
@@ -474,6 +476,82 @@ public class RecursivePortalCamera : MonoBehaviour
             : fallback;
     }
 
+    public int GetMostRecentlyPlacedPortalIndex()
+    {
+        return GetCoincidentFrontPortalIndex();
+    }
+
+    private bool ArePortalAperturesOverlappingOnSamePlane()
+    {
+        if (portals == null || portals.Length < PortalCount ||
+            portals[0] == null || portals[1] == null ||
+            portals[0].Renderer == null || portals[1].Renderer == null ||
+            !Portal.IsPortalPairActive(portals[0]))
+            return false;
+
+        Portal portal0 = portals[0];
+        Portal portal1 = portals[1];
+        Vector3 normal0 = Portal.GetPortalPlaneNormal(portal0).normalized;
+        Vector3 normal1 = Portal.GetPortalPlaneNormal(portal1).normalized;
+        if (Mathf.Abs(Vector3.Dot(normal0, normal1)) < 0.999f)
+            return false;
+
+        Bounds bounds0 = portal0.Renderer.localBounds;
+        Bounds bounds1 = portal1.Renderer.localBounds;
+        for (int i = 0; i < 4; ++i)
+        {
+            overlapApertureCorners0[i] = GetApertureCornerWorld(
+                portal0, bounds0, i);
+            overlapApertureCorners1[i] = GetApertureCornerWorld(
+                portal1, bounds1, i);
+        }
+
+        const float coplanarTolerance = 0.01f;
+        for (int i = 0; i < 4; ++i)
+        {
+            float planeDistance = Mathf.Abs(Vector3.Dot(
+                normal0,
+                overlapApertureCorners1[i] - overlapApertureCorners0[0]));
+            if (planeDistance > coplanarTolerance)
+                return false;
+        }
+
+        const float minimumOverlap = 0.0001f;
+        Transform transform0 = portal0.transform;
+        Transform transform1 = portal1.transform;
+        return HasProjectedApertureOverlap(transform0.right, minimumOverlap) &&
+            HasProjectedApertureOverlap(transform0.up, minimumOverlap) &&
+            HasProjectedApertureOverlap(transform1.right, minimumOverlap) &&
+            HasProjectedApertureOverlap(transform1.up, minimumOverlap);
+    }
+
+    private bool HasProjectedApertureOverlap(
+        Vector3 axis,
+        float minimumOverlap)
+    {
+        axis.Normalize();
+        Vector3 projectionOrigin = overlapApertureCorners0[0];
+        float min0 = 0f;
+        float max0 = min0;
+        float min1 = Vector3.Dot(
+            overlapApertureCorners1[0] - projectionOrigin, axis);
+        float max1 = min1;
+        for (int i = 1; i < 4; ++i)
+        {
+            float projection0 = Vector3.Dot(
+                overlapApertureCorners0[i] - projectionOrigin, axis);
+            float projection1 = Vector3.Dot(
+                overlapApertureCorners1[i] - projectionOrigin, axis);
+            min0 = Mathf.Min(min0, projection0);
+            max0 = Mathf.Max(max0, projection0);
+            min1 = Mathf.Min(min1, projection1);
+            max1 = Mathf.Max(max1, projection1);
+        }
+
+        return max0 > min1 + minimumOverlap &&
+            max1 > min0 + minimumOverlap;
+    }
+
     private int GetFrontPortalIndex(Camera viewer)
     {
         if (viewer == null || portals == null || portals.Length < PortalCount ||
@@ -695,6 +773,11 @@ public class RecursivePortalCamera : MonoBehaviour
         int frontPortalIndex = 0;
         bool fullyCoincident = mainCamera != null &&
             ArePortalAperturesCoincident(mainCamera, out frontPortalIndex);
+        bool overlapping = fullyCoincident ||
+            ArePortalAperturesOverlappingOnSamePlane();
+        int laterPlacedPortalIndex = fullyCoincident
+            ? frontPortalIndex
+            : GetMostRecentlyPlacedPortalIndex();
 
         if (portals == null)
             return;
@@ -703,8 +786,12 @@ public class RecursivePortalCamera : MonoBehaviour
         {
             Portal portal = portals[i];
             if (portal != null)
+            {
                 portal.SetCoincidentOverlapVisualsSuppressed(
                     fullyCoincident && i != frontPortalIndex);
+                portal.SetPortalEffectRenderOrder(
+                    overlapping, i == laterPlacedPortalIndex);
+            }
         }
     }
 
@@ -716,7 +803,10 @@ public class RecursivePortalCamera : MonoBehaviour
         for (int i = 0; i < PortalCount && i < portals.Length; ++i)
         {
             if (portals[i] != null)
+            {
                 portals[i].SetCoincidentOverlapVisualsSuppressed(false);
+                portals[i].SetPortalEffectRenderOrder(false, false);
+            }
         }
     }
 

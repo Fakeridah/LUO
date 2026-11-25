@@ -258,6 +258,10 @@ public class Portal : MonoBehaviour
     private Renderer[] coincidentOverlapRenderers;
     private bool[] coincidentOverlapRendererEnabledStates;
     private bool coincidentOverlapVisualsSuppressed;
+    private Renderer[] portalEffectRenderers;
+    private int[] portalEffectOriginalSortingOrders;
+    private bool portalEffectSortOrderOverridden;
+    private bool portalEffectRendersAfterPartner;
     private static RaycastHit[] portalMovementHits = new RaycastHit[32];
     private static Collider[] portalItemRegistrationHits = new Collider[32];
     private static int lastItemRegistrationSyncFrame = -1;
@@ -308,6 +312,7 @@ public class Portal : MonoBehaviour
     private void OnDisable()
     {
         SetCoincidentOverlapVisualsSuppressed(false);
+        SetPortalEffectRenderOrder(false, false);
         ActivePortals.Remove(this);
         ClearPortalOccupants();
 
@@ -434,20 +439,59 @@ public class Portal : MonoBehaviour
         coincidentOverlapVisualsSuppressed = suppressed;
     }
 
+    /// <summary>
+    /// URP sorts transparent portal effects back-to-front. When two aperture
+    /// planes intersect, give the later-placed portal a stable sorting-order
+    /// tie-break so the two animated alpha-cutout effects cannot swap order.
+    /// </summary>
+    public void SetPortalEffectRenderOrder(
+        bool overrideOrder,
+        bool renderAfterPartner)
+    {
+        if (portalEffectSortOrderOverridden == overrideOrder &&
+            (!overrideOrder ||
+                portalEffectRendersAfterPartner == renderAfterPartner))
+            return;
+
+        if (portalEffectRenderers != null)
+        {
+            for (int i = 0; i < portalEffectRenderers.Length; ++i)
+            {
+                Renderer target = portalEffectRenderers[i];
+                if (target == null)
+                    continue;
+
+                target.sortingOrder = overrideOrder
+                    ? portalEffectOriginalSortingOrders[i] +
+                        (renderAfterPartner ? 0 : -1)
+                    : portalEffectOriginalSortingOrders[i];
+            }
+        }
+
+        portalEffectSortOrderOverridden = overrideOrder;
+        portalEffectRendersAfterPartner = renderAfterPartner;
+    }
+
     private void CacheCoincidentOverlapRenderers()
     {
         var renderers = new List<Renderer>(4);
+        var effectRendererList = new List<Renderer>(4);
         if (outlineRenderer != null)
             renderers.Add(outlineRenderer);
 
         if (vfx != null)
         {
-            Renderer[] effectRenderers =
+            Renderer[] vfxRenderers =
                 vfx.GetComponentsInChildren<Renderer>(true);
-            for (int i = 0; i < effectRenderers.Length; ++i)
+            for (int i = 0; i < vfxRenderers.Length; ++i)
             {
-                Renderer effectRenderer = effectRenderers[i];
-                if (effectRenderer != null && !renderers.Contains(effectRenderer))
+                Renderer effectRenderer = vfxRenderers[i];
+                if (effectRenderer == null)
+                    continue;
+
+                if (!effectRendererList.Contains(effectRenderer))
+                    effectRendererList.Add(effectRenderer);
+                if (!renderers.Contains(effectRenderer))
                     renderers.Add(effectRenderer);
             }
         }
@@ -460,6 +504,16 @@ public class Portal : MonoBehaviour
             Renderer target = coincidentOverlapRenderers[i];
             coincidentOverlapRendererEnabledStates[i] =
                 target != null && target.enabled;
+        }
+
+        portalEffectRenderers = effectRendererList.ToArray();
+        portalEffectOriginalSortingOrders =
+            new int[portalEffectRenderers.Length];
+        for (int i = 0; i < portalEffectRenderers.Length; ++i)
+        {
+            Renderer target = portalEffectRenderers[i];
+            portalEffectOriginalSortingOrders[i] =
+                target != null ? target.sortingOrder : 0;
         }
     }
 
