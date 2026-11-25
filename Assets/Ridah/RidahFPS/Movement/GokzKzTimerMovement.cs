@@ -1265,7 +1265,14 @@ namespace RidahFPS.Controllers
             Collider collider,
             Vector3 movementDelta)
         {
-            if (!Grounded || collider == null ||
+            // CheckJumpButton detaches the player before Move() performs the
+            // hull sweep. Keep recognizing the support collider for this
+            // command: Unity can report the just-left floor as a zero-distance
+            // start-overlap hit and fabricate a normal that clips the upward
+            // jump velocity. Source's trace moving away from its support plane
+            // is clear, so ignore only tangent/away motion against the support
+            // recorded at the start of this command.
+            if ((!Grounded && !_startGrounded) || collider == null ||
                 _groundHit.collider != collider ||
                 movementDelta.sqrMagnitude <= 0.00000001f ||
                 _groundHit.normal.sqrMagnitude <= 0.5f)
