@@ -444,6 +444,13 @@ public class PortalableObject : MonoBehaviour
                 Teleported?.Invoke(entryPortal, exitPortal, portalRotation);
                 bounds = GetObjectBounds();
                 UpdatePortalOccupancy(bounds);
+
+                // Positional recovery can leave a dynamic prop just clear of
+                // a nearby collider. Clip its velocity before the next
+                // physics step, like the player's slide move, instead of
+                // transferring an impulse to that collider.
+                if (pushedForward && body != null && !body.isKinematic)
+                    ClipPortalExitVelocityAgainstNearbyColliders();
             }
         }
 
@@ -823,6 +830,106 @@ public class PortalableObject : MonoBehaviour
 
             recoveredRootPosition = candidateRootPosition;
             return true;
+        }
+
+        return false;
+    }
+
+    private void ClipPortalExitVelocityAgainstNearbyColliders()
+    {
+        if (body == null || body.isKinematic || objectColliders.Length == 0)
+            return;
+
+        Vector3 velocity = body.linearVelocity;
+        if (velocity.sqrMagnitude <= 0.000001f)
+            return;
+
+        Bounds bounds = GetObjectBounds();
+        int layerMask = GetTransformCollisionMask();
+        float castSkin = Mathf.Max(
+            TransformCollisionSkin,
+            Physics.defaultContactOffset);
+
+        for (int planeCount = 0; planeCount < 4; ++planeCount)
+        {
+            float speed = velocity.magnitude;
+            if (speed <= 0.0001f)
+                break;
+
+            Vector3 direction = velocity / speed;
+            Vector3 sweepDelta = velocity * Time.fixedDeltaTime;
+            float distance = sweepDelta.magnitude + castSkin;
+            int hitCount;
+            while (true)
+            {
+                hitCount = Physics.BoxCastNonAlloc(
+                    bounds.center,
+                    bounds.extents + Vector3.one * castSkin,
+                    direction,
+                    TransformCollisionHits,
+                    Quaternion.identity,
+                    distance,
+                    layerMask,
+                    QueryTriggerInteraction.Ignore);
+                if (hitCount < TransformCollisionHits.Length)
+                    break;
+
+                System.Array.Resize(
+                    ref TransformCollisionHits,
+                    TransformCollisionHits.Length * 2);
+            }
+
+            RaycastHit nearest = default;
+            float nearestDistance = float.PositiveInfinity;
+            for (int hitIndex = 0; hitIndex < hitCount; ++hitIndex)
+            {
+                RaycastHit hit = TransformCollisionHits[hitIndex];
+                Collider other = hit.collider;
+                if (other == null || IsOwnCollider(other) ||
+                    Portal.IsPortalOwnedCollider(other) ||
+                    !ObjectCollidesWithLayer(other.gameObject.layer) ||
+                    Portal.ShouldIgnoreMovementCollision(
+                        hit,
+                        bounds.center,
+                        bounds.extents,
+                        Quaternion.identity,
+                        sweepDelta) ||
+                    hit.distance >= nearestDistance)
+                    continue;
+
+                nearest = hit;
+                nearestDistance = hit.distance;
+            }
+
+            if (nearest.collider == null)
+                break;
+
+            Vector3 normal = nearest.normal.normalized;
+            float inwardSpeed = Vector3.Dot(velocity, normal);
+            if (inwardSpeed >= -0.0001f)
+                break;
+
+            velocity -= normal * inwardSpeed;
+        }
+
+        body.linearVelocity = velocity;
+    }
+
+    private bool ObjectCollidesWithLayer(int otherLayer)
+    {
+        for (int colliderIndex = 0;
+             colliderIndex < objectColliders.Length;
+             ++colliderIndex)
+        {
+            Collider objectCollider = objectColliders[colliderIndex];
+            if (objectCollider == null || objectCollider.isTrigger ||
+                !objectCollider.enabled ||
+                !objectCollider.gameObject.activeInHierarchy)
+                continue;
+
+            if (!Physics.GetIgnoreLayerCollision(
+                    objectCollider.gameObject.layer, otherLayer))
+                return true;
         }
 
         return false;
