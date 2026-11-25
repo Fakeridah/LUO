@@ -6,6 +6,8 @@ using RidahFPS.Controllers;
 public class Portal : MonoBehaviour
 {
     private static readonly List<Portal> ActivePortals = new List<Portal>();
+    private static long nextPlacementSequence;
+    private long placementSequence;
 
     private struct PortalHole
     {
@@ -226,6 +228,11 @@ public class Portal : MonoBehaviour
     [field: SerializeField]
     public Portal otherPortal { get; private set; }
 
+    public long PlacementSequence
+    {
+        get { return placementSequence; }
+    }
+
     [SerializeField]
     private Renderer outlineRenderer;
 
@@ -289,6 +296,8 @@ public class Portal : MonoBehaviour
     {
         if (!ActivePortals.Contains(this))
             ActivePortals.Add(this);
+        if (isPlaced && placementSequence == 0)
+            placementSequence = ++nextPlacementSequence;
         itemLayerSceneScanComplete = false;
     }
 
@@ -359,11 +368,11 @@ public class Portal : MonoBehaviour
 
     public Color GetOverlapMaterialColor(Color fallback)
     {
-        if (IsVisibleAccentColor(portalColour))
+        if (HasUsableColor(portalColour))
             return portalColour;
 
         if (outlineRenderer != null &&
-            TryGetMaterialAccentColor(
+            TryGetMaterialColor(
                 outlineRenderer.sharedMaterial,
                 "_OutlineColour",
                 out Color outlineColor))
@@ -372,11 +381,11 @@ public class Portal : MonoBehaviour
         if (Renderer != null && Renderer.sharedMaterial != null)
         {
             Material surfaceMaterial = Renderer.sharedMaterial;
-            if (TryGetMaterialAccentColor(
+            if (TryGetMaterialColor(
                     surfaceMaterial, "_BaseColor", out Color baseColor) ||
-                TryGetMaterialAccentColor(
+                TryGetMaterialColor(
                     surfaceMaterial, "_Color", out baseColor) ||
-                TryGetMaterialAccentColor(
+                TryGetMaterialColor(
                     surfaceMaterial, "_Colour", out baseColor))
                 return baseColor;
         }
@@ -384,7 +393,7 @@ public class Portal : MonoBehaviour
         return fallback;
     }
 
-    private static bool TryGetMaterialAccentColor(
+    private static bool TryGetMaterialColor(
         Material material,
         string propertyName,
         out Color color)
@@ -394,15 +403,14 @@ public class Portal : MonoBehaviour
             return false;
 
         color = material.GetColor(propertyName);
-        return IsVisibleAccentColor(color);
+        return HasUsableColor(color);
     }
 
-    private static bool IsVisibleAccentColor(Color color)
+    private static bool HasUsableColor(Color color)
     {
-        float maximum = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
-        float minimum = Mathf.Min(color.r, Mathf.Min(color.g, color.b));
-        return color.a > 0.01f && maximum > 0.05f &&
-            maximum - minimum > 0.05f;
+        // Achromatic portal colours are meaningful too: the primary portal is
+        // white and the secondary portal is black.
+        return color.a > 0.01f;
     }
 
     public void SetMaskID(int id)
@@ -724,6 +732,7 @@ public class Portal : MonoBehaviour
             attachmentTransform.rotation) * transform.rotation;
         gameObject.SetActive(true);
         isPlaced = true;
+        placementSequence = ++nextPlacementSequence;
         placeEabled = true;
         SyncPairCarve();
         return true;

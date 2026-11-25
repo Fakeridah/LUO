@@ -68,7 +68,8 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
                 DepthStencilReadMaskId, StencilReferences[i]);
         }
 
-        portalPass = new PortalAperturePass(materials)
+        portalPass = new PortalAperturePass(
+            materials, overlapFallbackColor)
         {
             renderPassEvent = RenderPassEvent.AfterRenderingOpaques
         };
@@ -122,11 +123,15 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
         }
 
         private readonly Material[] materials;
+        private readonly Color overlapFallbackColor;
         private RecursivePortalCamera portalCamera;
 
-        public PortalAperturePass(Material[] materials)
+        public PortalAperturePass(
+            Material[] materials,
+            Color overlapFallbackColor)
         {
             this.materials = materials;
+            this.overlapFallbackColor = overlapFallbackColor;
         }
 
         public void Setup(RecursivePortalCamera portalCamera)
@@ -196,8 +201,7 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             }
             materials[0].SetColor(
                 OverlapColorId,
-                portalCamera.GetOverlapMaterialColor(
-                    passData.frontPortalIndex,
+                portalCamera.GetMostRecentlyPlacedPortalColor(
                     overlapFallbackColor));
 
             using (var builder = renderGraph.AddUnsafePass<PassData>(

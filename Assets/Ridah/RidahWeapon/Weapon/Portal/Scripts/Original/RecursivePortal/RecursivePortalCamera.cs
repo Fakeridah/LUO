@@ -453,21 +453,19 @@ public class RecursivePortalCamera : MonoBehaviour
         if (matchedCorners != 0xF)
             return false;
 
-        frontPortalIndex = GetCoincidentFrontPortalIndex(viewer);
+        frontPortalIndex = GetCoincidentFrontPortalIndex();
         return true;
     }
 
-    public Color GetOverlapMaterialColor(
-        int frontPortalIndex,
-        Color fallback)
+    public Color GetMostRecentlyPlacedPortalColor(Color fallback)
     {
-        int otherPortalIndex = 1 - Mathf.Clamp(frontPortalIndex, 0, 1);
-        Portal overlapPortal = portals != null &&
-            otherPortalIndex < portals.Length
-                ? portals[otherPortalIndex]
+        int latestPortalIndex = GetCoincidentFrontPortalIndex();
+        Portal latestPortal = portals != null &&
+            latestPortalIndex < portals.Length
+                ? portals[latestPortalIndex]
                 : null;
-        return overlapPortal != null
-            ? overlapPortal.GetOverlapMaterialColor(fallback)
+        return latestPortal != null
+            ? latestPortal.GetOverlapMaterialColor(fallback)
             : fallback;
     }
 
@@ -504,42 +502,20 @@ public class RecursivePortalCamera : MonoBehaviour
         return 0;
     }
 
-    private int GetCoincidentFrontPortalIndex(Camera viewer)
+    private int GetCoincidentFrontPortalIndex()
     {
-        if (viewer == null || portals == null || portals.Length < PortalCount ||
+        if (portals == null || portals.Length < PortalCount ||
             portals[0] == null || portals[1] == null)
             return 0;
 
-        Vector3 viewPosition = viewer.transform.position;
-        Vector3 toPortal0 = GetApertureCenterWorld(portals[0]) - viewPosition;
-        Vector3 toPortal1 = GetApertureCenterWorld(portals[1]) - viewPosition;
-        float facing0 = toPortal0.sqrMagnitude > 0.000001f
-            ? Vector3.Dot(
-                Portal.GetPortalPlaneNormal(portals[0]).normalized,
-                -toPortal0.normalized)
-            : 0f;
-        float facing1 = toPortal1.sqrMagnitude > 0.000001f
-            ? Vector3.Dot(
-                Portal.GetPortalPlaneNormal(portals[1]).normalized,
-                -toPortal1.normalized)
-            : 0f;
-        if (Mathf.Abs(facing0 - facing1) > 0.001f)
-            return facing0 > facing1 ? 0 : 1;
+        long sequence0 = portals[0].PlacementSequence;
+        long sequence1 = portals[1].PlacementSequence;
+        if (sequence0 != sequence1)
+            return sequence0 > sequence1 ? 0 : 1;
 
-        float depth0 = Vector3.Dot(
-            viewer.transform.forward, toPortal0);
-        float depth1 = Vector3.Dot(
-            viewer.transform.forward, toPortal1);
-        if (Mathf.Abs(depth0 - depth1) > 0.0001f)
-            return depth0 < depth1 ? 0 : 1;
-
-        return 0;
-    }
-
-    private static Vector3 GetApertureCenterWorld(Portal portal)
-    {
-        Bounds bounds = portal.Renderer.localBounds;
-        return portal.transform.TransformPoint(bounds.center);
+        // Authored portals without runtime placement history have no reliable
+        // "last placed" value. Use portal 1 as a stable tie-break.
+        return 1;
     }
 
     private static Vector3 GetApertureCornerWorld(
@@ -806,6 +782,8 @@ public class RecursivePortalCamera : MonoBehaviour
 
         Renderer entrySurface = entryPortal.Renderer;
         Renderer exitSurface = exitPortal.Renderer;
+        bool aperturesCoincident = ArePortalAperturesCoincident(
+            sourceViewCamera, out _);
 
         for (int viewIndex = portalViewPositions.Count - 1;
              viewIndex >= 0; --viewIndex)
@@ -819,6 +797,8 @@ public class RecursivePortalCamera : MonoBehaviour
                 portalTextures[entryIndex, absoluteDepth];
 
             Texture previousEntryTexture = GetPortalTexture(entryIndex);
+            bool entrySurfaceWasEnabled =
+                entrySurface != null && entrySurface.enabled;
             bool exitSurfaceWasEnabled =
                 exitSurface != null && exitSurface.enabled;
             Texture childTexture = viewIndex + 1 < portalViewPositions.Count
@@ -826,6 +806,8 @@ public class RecursivePortalCamera : MonoBehaviour
                 : terminalStaticTexture;
 
             BindPortalTexture(entryIndex, childTexture);
+            if (aperturesCoincident && entrySurface != null)
+                entrySurface.enabled = false;
             if (exitSurface != null)
                 exitSurface.enabled = false;
 
@@ -848,7 +830,10 @@ public class RecursivePortalCamera : MonoBehaviour
             {
                 portalCamera.cullingMask = previousCullingMask;
                 if (entrySurface != null)
+                {
                     BindPortalTexture(entryIndex, previousEntryTexture);
+                    entrySurface.enabled = entrySurfaceWasEnabled;
+                }
                 if (exitSurface != null)
                     exitSurface.enabled = exitSurfaceWasEnabled;
             }
