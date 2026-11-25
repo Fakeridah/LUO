@@ -202,6 +202,7 @@ MonoBehaviour:
   m_Name: PortalApertureRendererFeature
   m_EditorClassIdentifier: 
   m_Active: 1
+  overlapFallbackColor: {r: 0, g: 0.58431375, b: 1, a: 1}
   compositeShader: {fileID: 4800000, guid: 83d1c0f5a7e34d42ba99327fac188003, type: 3}
 --- !u!114 &-3690972145036422227
 MonoBehaviour:

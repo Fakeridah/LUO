@@ -855,7 +855,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   lockView: 0
-  virtualCamera: {fileID: 4327321126860393675}
+  csgoVerticalFieldOfView: 73.73979
+  defaultNearClipPlane: 0.01
+  portalNearClipPlane: 0.01905
   bodyTransform: {fileID: 7106022715029490147}
   sensitivityMultiplier: 1
   horizontalSensitivity: 1

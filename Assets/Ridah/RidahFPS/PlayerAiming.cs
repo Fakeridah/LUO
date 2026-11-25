@@ -1,12 +1,18 @@
 ﻿using UnityEngine;
-using Unity.Cinemachine;
 using GameOptionsUtility;
 namespace RidahFPS.Controllers {
 	public class PlayerAiming : MonoBehaviour
 	{
 		public bool lockView = false;
-		[Header("VirtualCamera")]
-		public CinemachineVirtualCamera virtualCamera;
+
+		[Header("Camera")]
+		[Tooltip("CS:GO view FOV expressed as Unity's vertical field of view, in degrees.")]
+		[Range(1f, 179f)]
+		public float csgoVerticalFieldOfView = 73.73979f;
+		[Min(0.001f)]
+		public float defaultNearClipPlane = 0.01f;
+		[Min(0.001f)]
+		public float portalNearClipPlane = 0.01905f;
 
 		[Header("References")]
 		public Transform bodyTransform;
@@ -65,9 +71,7 @@ namespace RidahFPS.Controllers {
 		private void Start()
 		{
 			player = LZM.Player;
-			currentScale = Camera.main.fieldOfView;
-			if (virtualCamera != null)
-				currentScale = virtualCamera.m_Lens.FieldOfView;
+			currentScale = csgoVerticalFieldOfView;
 			// Lock the mouse
 			Cursor.lockState = CursorLockMode.Locked;
 			Cursor.visible = false;
@@ -115,6 +119,29 @@ namespace RidahFPS.Controllers {
 			// C_Portal_Player::ClientThink also calls Reorient, independently
 			// of the movement-command PostThink path advanced by FixedUpdate.
 			AdvancePortalEyeOffset(Time.deltaTime);
+		}
+
+		private void LateUpdate()
+		{
+			ApplySourceCameraSettings();
+		}
+
+		private void ApplySourceCameraSettings()
+		{
+			CachePortalViewCamera();
+			if (portalViewCamera == null)
+				return;
+
+			portalViewCamera.fieldOfView = csgoVerticalFieldOfView;
+			bool portalPairActive = RecursivePortalCamera.Active != null &&
+				RecursivePortalCamera.Active.HasActivePortalPair;
+			float requiredNearClipPlane = portalPairActive
+				? portalNearClipPlane
+				: defaultNearClipPlane;
+			if (!Mathf.Approximately(
+					portalViewCamera.nearClipPlane,
+					requiredNearClipPlane))
+				portalViewCamera.nearClipPlane = requiredNearClipPlane;
 		}
 
 		public void SetPortalEyeOffset(Vector3 transformedOldEyePosition,
@@ -206,10 +233,6 @@ namespace RidahFPS.Controllers {
 			else
 			{
 				Camera.main.fieldOfView = currentScale;
-			}
-			if (virtualCamera != null)
-			{
-				virtualCamera.m_Lens.FieldOfView = currentScale;
 			}
 		}
 

@@ -397,6 +397,19 @@ namespace RidahFPS.Controllers
             if (_walkMovedThisTick && startVelocity.magnitude >= UnitScale)
                 StayOnGround(ref bestPosition, halfExtents);
 
+            // This controller writes the player Transform directly, so the
+            // Unity physics solver does not push the hull out of overlaps.
+            // Keep the committed pose non-intersecting using PhysX's minimum
+            // separation vector; contactOffset is a speculative contact
+            // margin, not permission for the movement hull to remain inside
+            // a solid collider.
+            if (TryDepenetrateHull(
+                    bestPosition,
+                    halfExtents,
+                    out Vector3 nonOverlappingPosition,
+                    out _))
+                bestPosition = nonOverlappingPosition;
+
             bestVelocity -= _baseVelocity;
             bestFinalVelocity -= _baseVelocity;
 
@@ -517,12 +530,17 @@ namespace RidahFPS.Controllers
                 int hitCount = SweepBox(position, halfExtents, direction, distance);
                 RaycastHit nearest;
                 bool hit = TryGetNearestHit(
-                    hitCount, out nearest, out bool contactedPortalRamp);
-                Vector3 endPosition = position + velocity * timeLeft;
+                    hitCount,
+                    out nearest,
+                    out bool contactedPortalRamp,
+                    position,
+                    halfExtents,
+                    velocity * timeLeft);
                 // Unity casts use a slightly inset hull. Their contact point
                 // is therefore one skin farther along the path than the
                 // equivalent full Source hull trace. Convert back to Source's
                 // full-hull travel distance before advancing or clipping.
+                Vector3 endPosition = position + velocity * timeLeft;
                 float safeDistance = hit
                     ? Mathf.Clamp(
                         nearest.distance - CollisionSkin,
@@ -1024,25 +1042,37 @@ namespace RidahFPS.Controllers
                 ? direction.normalized * distance
                 : Vector3.zero;
 
-            while (true)
+            // CS:GO world traces test solid brush planes from either side.
+            // Unity non-convex MeshCollider sweeps ignore triangle backfaces
+            // when this global flag is false. Enable it only for this
+            // synchronous movement query, then restore the project's setting.
+            bool previousBackfaces = Physics.queriesHitBackfaces;
+            Physics.queriesHitBackfaces = true;
+            try
             {
-                int hitCount = Physics.BoxCastNonAlloc(
-                    center,
-                    halfExtents,
-                    direction,
-                    _moveHits,
-                    orientation,
-                    distance,
-                    layerMask,
-                    queryTriggerInteraction);
-                if (hitCount < _moveHits.Length)
-                    return hitCount;
+                while (true)
+                {
+                    int hitCount = Physics.BoxCastNonAlloc(
+                        center,
+                        halfExtents,
+                        direction,
+                        _moveHits,
+                        orientation,
+                        distance,
+                        layerMask,
+                        queryTriggerInteraction);
+                    if (hitCount < _moveHits.Length)
+                        return hitCount;
 
-                // A Source hull trace returns the closest blocking trace. A
-                // full Unity NonAlloc buffer can omit the nearest collider, so
-                // grow and retry instead of letting buffer capacity change the
-                // movement result in dense corners.
-                System.Array.Resize(ref _moveHits, _moveHits.Length * 2);
+                    // A Source hull trace returns the closest blocking trace.
+                    // A full Unity NonAlloc buffer can omit the nearest
+                    // collider, so grow and retry in dense corners.
+                    System.Array.Resize(ref _moveHits, _moveHits.Length * 2);
+                }
+            }
+            finally
+            {
+                Physics.queriesHitBackfaces = previousBackfaces;
             }
         }
 
@@ -1054,7 +1084,10 @@ namespace RidahFPS.Controllers
         private bool TryGetNearestHit(
             int hitCount,
             out RaycastHit nearest,
-            out bool contactedPortalTransitionRamp)
+            out bool contactedPortalTransitionRamp,
+            Vector3? movementBasePosition = null,
+            Vector3? movementHalfExtents = null,
+            Vector3? movementDelta = null)
         {
             nearest = default;
             contactedPortalTransitionRamp = false;
@@ -1066,6 +1099,46 @@ namespace RidahFPS.Controllers
                 if (candidate.collider == null ||
                     candidate.collider == _sourceHullCollider)
                     continue;
+                if (_surfer != null &&
+                    _surfer.MoveData.playerTransform != null &&
+                    candidate.collider.transform.IsChildOf(
+                        _surfer.MoveData.playerTransform))
+                    continue;
+
+                // Backface-enabled Unity sweeps can report the current
+                // support mesh at distance zero during a tangent walk. That
+                // is not a blocking Source plane trace; Unity's fabricated
+                // start-overlap normal points against the movement and would
+                // clip all horizontal speed. The shallow-penetration path
+                // below cannot repair this case because a touching mesh has
+                // no ComputePenetration result.
+                if (movementDelta.HasValue &&
+                    candidate.distance <= CollisionSkin &&
+                    IsNonBlockingGroundSupportContact(
+                        candidate.collider, movementDelta.Value))
+                    continue;
+
+                if (movementBasePosition.HasValue &&
+                    movementHalfExtents.HasValue &&
+                    movementDelta.HasValue &&
+                    candidate.distance <= CollisionSkin &&
+                    TryGetShallowStartSolidNormal(
+                        candidate.collider,
+                        movementBasePosition.Value,
+                        movementHalfExtents.Value,
+                        movementDelta.Value,
+                        out Vector3 contactNormal,
+                        out bool nonBlockingContact))
+                {
+                    // BoxCast reports zero distance for a shallow starting
+                    // overlap and fabricates a normal opposite the cast
+                    // direction. Reconstruct the actual separating plane.
+                    // A contact we are moving away from or along must not
+                    // consume another movement bump.
+                    if (nonBlockingContact)
+                        continue;
+                    candidate.normal = contactNormal;
+                }
 
                 bool ignoredByPortal = Portal.ShouldIgnoreMovementCollision(
                     candidate,
@@ -1116,6 +1189,24 @@ namespace RidahFPS.Controllers
             {
                 RaycastHit raw = _moveHits[i];
                 if (raw.collider == null || raw.collider == _sourceHullCollider)
+                    continue;
+                if (movementDelta.HasValue &&
+                    raw.distance <= CollisionSkin &&
+                    IsNonBlockingGroundSupportContact(
+                        raw.collider, movementDelta.Value))
+                    continue;
+                if (movementBasePosition.HasValue &&
+                    movementHalfExtents.HasValue &&
+                    movementDelta.HasValue &&
+                    raw.distance <= CollisionSkin &&
+                    TryGetShallowStartSolidNormal(
+                        raw.collider,
+                        movementBasePosition.Value,
+                        movementHalfExtents.Value,
+                        movementDelta.Value,
+                        out _,
+                        out bool nonBlockingContact) &&
+                    nonBlockingContact)
                     continue;
                 if (Portal.IsPortalOwnedCollider(raw.collider))
                     continue;
@@ -1168,6 +1259,77 @@ namespace RidahFPS.Controllers
                 nearest.normal = planarBlockingNormal;
 
             return found;
+        }
+
+        private bool IsNonBlockingGroundSupportContact(
+            Collider collider,
+            Vector3 movementDelta)
+        {
+            if (!Grounded || collider == null ||
+                _groundHit.collider != collider ||
+                movementDelta.sqrMagnitude <= 0.00000001f ||
+                _groundHit.normal.sqrMagnitude <= 0.5f)
+                return false;
+
+            // Source clips against the actual plane normal. A Unity
+            // start-overlap hit has no useful normal, so use the normal from
+            // this tick's ground categorization to distinguish tangent/away
+            // motion from motion entering the support plane.
+            return Vector3.Dot(
+                movementDelta.normalized,
+                _groundHit.normal.normalized) >= -0.01f;
+        }
+
+        private bool TryGetShallowStartSolidNormal(
+            Collider collider,
+            Vector3 basePosition,
+            Vector3 halfExtents,
+            Vector3 movementDelta,
+            out Vector3 contactNormal,
+            out bool nonBlockingContact)
+        {
+            contactNormal = Vector3.zero;
+            nonBlockingContact = false;
+            if (_sourceHullCollider == null || collider == null ||
+                collider == _sourceHullCollider ||
+                Portal.IsPortalOwnedCollider(collider) ||
+                movementDelta.sqrMagnitude <= 0.00000001f ||
+                (_surfer != null &&
+                 _surfer.MoveData.playerTransform != null &&
+                 collider.transform.IsChildOf(
+                    _surfer.MoveData.playerTransform)))
+                return false;
+
+            // Only substitute the normal when the active collision hull and
+            // this movement trace describe the same box.
+            Vector3 hullScale = _sourceHullCollider.transform.lossyScale;
+            Vector3 colliderHalfExtents = Vector3.Scale(
+                _sourceHullCollider.size * 0.5f,
+                new Vector3(
+                    Mathf.Abs(hullScale.x),
+                    Mathf.Abs(hullScale.y),
+                    Mathf.Abs(hullScale.z)));
+            if ((colliderHalfExtents - halfExtents).sqrMagnitude >
+                CollisionSkin * CollisionSkin)
+                return false;
+
+            if (!Physics.ComputePenetration(
+                    _sourceHullCollider,
+                    basePosition,
+                    Quaternion.identity,
+                    collider,
+                    collider.transform.position,
+                    collider.transform.rotation,
+                    out Vector3 separationDirection,
+                    out float penetration) ||
+                penetration <= 0f ||
+                penetration > GetContactPenetrationTolerance(collider))
+                return false;
+
+            contactNormal = separationDirection.normalized;
+            nonBlockingContact = Vector3.Dot(
+                movementDelta.normalized, contactNormal) >= -0.0001f;
+            return contactNormal.sqrMagnitude > 0.5f;
         }
 
         public void Process(IGokzMovementPlayer surfer)
@@ -1643,6 +1805,31 @@ namespace RidahFPS.Controllers
                     _sampledGroundVelocity = Vector3.zero;
                     Physics.SyncTransforms();
 
+                    // Re-categorize at the exit immediately. The entry
+                    // ground entity is invalid after teleporting, but the
+                    // exit may itself have walkable support. Keeping this
+                    // state current avoids a one-tick airborne/UI transition.
+                    if (_collisionReady)
+                        Grounded = CategorizePosition(out _groundHit);
+                    _groundNormal = Grounded
+                        ? _groundHit.normal
+                        : _movementUp;
+                    _surfer.MoveData.grounded = Grounded;
+                    _surfer.MoveData.groundTransform = Grounded
+                        ? _groundHit.transform
+                        : null;
+                    _surfer.MoveData.SurfaceFriction = Grounded
+                        ? GetSurfaceFriction(_groundHit)
+                        : 1f;
+                    _surfer.MoveData.SurfaceMaxSpeedFactor = Grounded
+                        ? (_lastGroundSurfaceMaxSpeedFactor =
+                            GetSurfaceMaxSpeedFactor(_groundHit))
+                        : _lastGroundSurfaceMaxSpeedFactor;
+                    _surfer.MoveData.SurfaceJumpFactor = Grounded
+                        ? GetSurfaceJumpFactor(_groundHit)
+                        : 1f;
+                    UpdateGroundEntityVelocitySample();
+
                     if (portablePlayer != null)
                     {
                         Portal.CommitPlayerTeleport(
@@ -1970,7 +2157,12 @@ namespace RidahFPS.Controllers
                 GetCollisionMask(),
                 QueryTriggerInteraction.Ignore);
 
-            bool found = TryGetNearestStandableHit(hitCount, out hit);
+            bool found = TryGetNearestStandableHit(
+                hitCount,
+                out hit,
+                _surfer.MoveData.playerTransform.position,
+                halfExtents,
+                -_movementUp * probeDistance);
             if (!found)
             {
                 // CGameMovement::TracePlayerBBoxForGround retries four
@@ -2006,7 +2198,10 @@ namespace RidahFPS.Controllers
                         QueryTriggerInteraction.Ignore);
                     if (!TryGetNearestStandableHit(
                             quadrantHitCount,
-                            out RaycastHit quadrantHit))
+                            out RaycastHit quadrantHit,
+                            _surfer.MoveData.playerTransform.position,
+                            halfExtents,
+                            -_movementUp * probeDistance))
                         continue;
 
                     // TracePlayerBBoxForGround returns on the first
@@ -2029,7 +2224,10 @@ namespace RidahFPS.Controllers
 
         private bool TryGetNearestStandableHit(
             int hitCount,
-            out RaycastHit nearest)
+            out RaycastHit nearest,
+            Vector3 movementBasePosition,
+            Vector3 movementHalfExtents,
+            Vector3 movementDelta)
         {
             nearest = default;
             float nearestDistance = float.PositiveInfinity;
@@ -2058,6 +2256,24 @@ namespace RidahFPS.Controllers
                      candidate.collider.transform.IsChildOf(
                          _surfer.MoveData.playerTransform)))
                     continue;
+
+                // A downward BoxCast that starts slightly inside the side of
+                // a BoxCollider can report distance zero with a fabricated
+                // upward normal. CategorizePosition must use the actual
+                // separating plane before deciding that this is ground.
+                if (candidate.distance <= CollisionSkin &&
+                    TryGetShallowStartSolidNormal(
+                        candidate.collider,
+                        movementBasePosition,
+                        movementHalfExtents,
+                        movementDelta,
+                        out Vector3 startSolidNormal,
+                        out bool nonBlockingStartSolid))
+                {
+                    if (nonBlockingStartSolid)
+                        continue;
+                    candidate.normal = startSolidNormal;
+                }
 
                 // A zero-thickness non-convex MeshCollider (a single-quad
                 // ramp) has no volume, so PhysX reports an unreliable normal
@@ -3090,7 +3306,7 @@ namespace RidahFPS.Controllers
             // Without this the frozen case is completely silent: the sweeps
             // report start-solid, IsHullStuckAt sees no penetration, and no
             // recovery path ever logs a reason.
-            if (frozen && count > 0 &&
+            if (frozen && firstName != null &&
                 _elapsed - _lastShellProbeLogTime > 1f)
             {
                 _lastShellProbeLogTime = _elapsed;
@@ -3208,7 +3424,7 @@ namespace RidahFPS.Controllers
                 Vector3 center = position + _movementUp * halfExtents.y;
                 int count = Physics.OverlapBoxNonAlloc(
                     center,
-                    GetQueryHalfExtents(halfExtents),
+                    halfExtents,
                     _hullOverlaps,
                     Quaternion.identity,
                     GetCollisionMask(),
@@ -3239,11 +3455,10 @@ namespace RidahFPS.Controllers
                             out float distance))
                         continue;
 
-                    float tolerance = GetContactPenetrationTolerance(collider);
-                    if (distance <= tolerance)
+                    if (distance <= 0.000001f)
                         continue;
 
-                    push += direction * (distance - tolerance + CollisionSkin);
+                    push += direction * (distance + CollisionSkin);
                     blocker = collider;
                 }
 

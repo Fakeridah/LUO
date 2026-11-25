@@ -39,7 +39,10 @@
 - 用户反馈：普通 BoxCollider 和有体积的 MeshCollider 碰撞目前看起来正常；零厚度 Plane MeshCollider 仍会卡住。
 - 已修正短距离 Trace 被跳过、斜向扫掠的皮肤距离补偿，并针对零厚度平面增加起始穿面恢复及切向/离开方向命中过滤。平面迎面穿越仍应阻挡。
 - 起始穿面恢复经用户运行反馈未解决问题；之后的切向命中过滤已通过 Unity 编译（`failed=false`，`errors=[]`），尚未进行运行时复测。当前不能记为已解决。
-- 下一步只复测 Plane MeshCollider；若仍卡住，需定位实际 Trace 的命中比例、法线和 `startSolid/allSolid` 状态，再改对应分支。
+- 2026-11-25 用户反馈：窄物体夹缝、斜坡与地面交界仍会卡住。撤回上一轮无效的穿透阈值和 hull 距离换算改动。
+- 坡面 `valid_plane` Trace 法线覆写经用户反馈无效，已撤回。
+- 找到实体穿面查询漏检：`ProjectSettings/DynamicsManager.asset` 中 `m_QueriesHitBackfaces: 0`，角色主运动 `Physics.BoxCastNonAlloc` 查询没有覆盖该设置；Unity 非凸 MeshCollider 背面可能因此不命中。现在仅在运动 BoxCast 同步查询期间临时启用背面命中，并在 `finally` 里恢复原值。角色仍由运动代码直接移动 Transform，Unity 刚体求解器不会替代该手动扫掠。
+- Source 的 `CheckStuck` 是周期性位置检查/偏移重试；GOKZ KZTimer 的 `FixDisplacementStuck` 只处理解除蹲姿后站立 hull 卡入 displacement。它们都不是任意几何夹角的强制推出逻辑。背面查询修改尚未在 Unity 运行时验证。
 
 ## 传送门递归画面黑条（2026-11-24）
 
@@ -52,10 +55,18 @@
 
 ## 重叠传送门显示（2026-11-25）
 
-- 主相机的重叠 aperture 分别累加两扇门的 stencil 位；部分交叠区取最后成功放置的门的 `portalColour`，纯白和纯黑也作为有效颜色。递归终点的 quarter-gray 静态纹理值保持不变。
-- 两个洞口四个世界角点在 0.001 Unity unit 内一致时按完全重合处理：最后放置的门覆盖先放置的门。递归视图同时隐藏两扇同位洞口表面，避免同位入口门把递归终点灰色贴图显示出来。
-- 修复 `PortalApertureRendererFeature` 的 `CS0120`：将序列化回退色传入 Pass 实例，避免静态渲染回调访问外层字段。Unity 当前 `compiling=false`、活动 Console 错误数为 0；未进入 Play Mode，重叠画面仍待运行确认。
+- 主相机的重叠 aperture 分别累加两扇门的 stencil 位；部分交叠区取最后成功放置的门的 `portalColour`（白色和黑色都有效）。递归终点原有的 quarter-gray 静态纹理保持不变。
+- 两个洞口四个世界角点在 0.001 Unity unit 内一致时按完全重合处理：最后放置的门覆盖先放置的门。递归视图会同时隐藏两扇同位洞口表面，避免把递归终点灰色贴图画在对面门的位置。
+- Unity Editor 当前就绪、`compiling=false`、活动 Console 错误数为 0；未进入 Play Mode，重叠颜色与完全重合画面仍待运行确认。
 - 开口并集的边界面分类曾把任意非洞口法线轴的外露面都当作洞口侧壁，可能在相交洞口的前/后边界补出错误碰撞面（包括看起来像地面的面）。现在要求该面坐标确实等于对应洞口的开口边界，才生成侧壁；没有加回重叠放置限制。此生成修正尚未运行验证。
+
+## 昨日改动核对与 PlayerAiming 镜头设置（2026-11-25）
+
+- 已逐项核对 2026-11-24 的 Git 历史：`1d0f7bea`（传送门/材质与玩家视角代码）、`42249c5e`（`SceneRenderSettings`）、`ae8000f5`（传送门递归渲染、洞口合成、角色与物体出口逻辑）、`378e0223`（物体出口恢复说明）和 `a7d62a7c`（`BlackHand.shadergraph`）。这些提交都仍在当前分支中；本次镜头恢复没有改动它们。
+- 按本次对话记录恢复并暴露 `PlayerAiming` 参数：CS:GO 垂直 FOV `73.73979°`、普通近平面 `0.01`、有效传送门对的近平面 `0.01905`；Prefab 已序列化这些数值。`RecursivePortalCamera.HasActivePortalPair` 提供有效门对判断。Cinemachine 组件保留原 lens FOV `60`、near clip `0.03`，`PlayerAiming` 不再引用它。
+- 恢复传送出口 grounded 修正：传送后先清除入口地面实体，再立即调用 `CategorizePosition` 检测出口支撑；同步 `Grounded`、地面变换、法线、摩擦和表面速度/跳跃参数。出口无可站立支撑时仍为空中，避免 UI 在出口有地面时闪变。
+- `PlayerAiming.cs` 在 `1d0f7bea` 中已有的视角角度处理和传送眼位偏移逻辑仍保留。其 11 月 24 日未提交版本没有被原样找回；当前配置依据用户在对话中给出的要求重建。11 月 24 日已提交的其他改动仍在当前分支。
+- 未启动 Unity、未编译或运行游戏；镜头和传送后 grounded 行为尚未运行验证。
 
 ## 传送门出口前推与阻挡拒绝（2026-11-25）
 

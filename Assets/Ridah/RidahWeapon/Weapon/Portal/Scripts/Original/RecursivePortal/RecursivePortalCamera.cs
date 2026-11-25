@@ -130,7 +130,8 @@ public class RecursivePortalCamera : MonoBehaviour
     private void CreateTerminalStaticTexture()
     {
         // Source's portal static overlay falls back to a quarter-gray surface
-        // when its optional static texture is absent.
+        // when its optional static texture is absent. Keep this terminal
+        // recursion fallback independent from the aperture-overlap treatment.
         terminalStaticTexture = new Texture2D(
             1, 1, TextureFormat.RGBA32, false, true)
         {
@@ -367,6 +368,17 @@ public class RecursivePortalCamera : MonoBehaviour
         {
             ResolveCameras();
             return mainCamera;
+        }
+    }
+
+    public bool HasActivePortalPair
+    {
+        get
+        {
+            return portals != null && portals.Length >= PortalCount &&
+                portals[0] != null && portals[1] != null &&
+                portals[0].otherPortal == portals[1] &&
+                Portal.IsPortalPairActive(portals[0]);
         }
     }
 
