@@ -12,9 +12,23 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
 {
     private const int PortalCount = 2;
     private static readonly int MainTextureId = Shader.PropertyToID("_MainTex");
+    private static readonly int OverlapColorId =
+        Shader.PropertyToID("_OverlapColor");
+    private static readonly int CompositeStencilRefId =
+        Shader.PropertyToID("_PortalCompositeStencilRef");
+    private static readonly int CompositeStencilReadMaskId =
+        Shader.PropertyToID("_PortalCompositeStencilReadMask");
+    private static readonly int DepthStencilRefId =
+        Shader.PropertyToID("_PortalDepthStencilRef");
+    private static readonly int DepthStencilReadMaskId =
+        Shader.PropertyToID("_PortalDepthStencilReadMask");
     // URP Deferred reserves bits 5 and 6 for material classification.
     // Keep portal IDs inside URP's user stencil mask (bits 0-3).
     private static readonly int[] StencilReferences = { 4, 8 };
+
+    [SerializeField]
+    private Color overlapFallbackColor =
+        new Color(0f, 0.58431375f, 1f, 1f);
 
     [SerializeField]
     private Shader compositeShader;
@@ -42,6 +56,16 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             materials[i] = CoreUtils.CreateEngineMaterial(shader);
             materials[i].SetFloat(
                 "_PortalStencilRef", StencilReferences[i]);
+            materials[i].SetFloat(
+                "_PortalStencilWriteMask", StencilReferences[i]);
+            materials[i].SetFloat(
+                CompositeStencilRefId, StencilReferences[i]);
+            materials[i].SetFloat(
+                CompositeStencilReadMaskId, 12f);
+            materials[i].SetFloat(
+                DepthStencilRefId, StencilReferences[i]);
+            materials[i].SetFloat(
+                DepthStencilReadMaskId, StencilReferences[i]);
         }
 
         portalPass = new PortalAperturePass(materials)
@@ -91,6 +115,10 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             public readonly Renderer[] depthFixCaps = new Renderer[PortalCount];
             public readonly Texture[] textures = new Texture[PortalCount];
             public Material[] materials;
+            public int farPortalIndex;
+            public int nearPortalIndex;
+            public int frontPortalIndex;
+            public bool fullyCoincident;
         }
 
         private readonly Material[] materials;
@@ -124,6 +152,16 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             {
                 materials = materials
             };
+            portalCamera.GetPortalRenderOrder(
+                cameraData.camera,
+                out passData.farPortalIndex,
+                out passData.nearPortalIndex);
+            passData.fullyCoincident =
+                portalCamera.ArePortalAperturesCoincident(
+                    cameraData.camera, out passData.frontPortalIndex);
+            if (!passData.fullyCoincident)
+                passData.frontPortalIndex = passData.nearPortalIndex;
+
             for (int portalIndex = 0;
                  portalIndex < PortalCount;
                  ++portalIndex)
@@ -143,7 +181,24 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
 
                 materials[portalIndex].SetTexture(
                     MainTextureId, passData.textures[portalIndex]);
+                bool selectedFullOverlapView = passData.fullyCoincident &&
+                    portalIndex == passData.frontPortalIndex;
+                float selectedStencilRef = StencilReferences[portalIndex];
+                materials[portalIndex].SetFloat(
+                    CompositeStencilRefId, selectedStencilRef);
+                materials[portalIndex].SetFloat(
+                    CompositeStencilReadMaskId,
+                    selectedFullOverlapView ? selectedStencilRef : 12f);
+                materials[portalIndex].SetFloat(
+                    DepthStencilRefId, selectedStencilRef);
+                materials[portalIndex].SetFloat(
+                    DepthStencilReadMaskId, selectedStencilRef);
             }
+            materials[0].SetColor(
+                OverlapColorId,
+                portalCamera.GetOverlapMaterialColor(
+                    passData.frontPortalIndex,
+                    overlapFallbackColor));
 
             using (var builder = renderGraph.AddUnsafePass<PassData>(
                        "Source Style Portal Aperture Composite",
@@ -157,6 +212,10 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
                     graphPassData.depthFixCaps[i] = passData.depthFixCaps[i];
                     graphPassData.textures[i] = passData.textures[i];
                 }
+                graphPassData.farPortalIndex = passData.farPortalIndex;
+                graphPassData.nearPortalIndex = passData.nearPortalIndex;
+                graphPassData.frontPortalIndex = passData.frontPortalIndex;
+                graphPassData.fullyCoincident = passData.fullyCoincident;
 
                 builder.SetRenderAttachment(
                     resourceData.activeColorTexture, 0, AccessFlags.ReadWrite);
@@ -177,13 +236,24 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             PassData data,
             CommandBuffer commandBuffer)
         {
-            // Source first marks the portal quad and its separately generated
-            // near-plane stencil cap. The cap bypasses depth testing so the
-            // near-plane intersection cannot leave a gap.
-            for (int portalIndex = 0;
-                 portalIndex < PortalCount;
-                 ++portalIndex)
+            // Clear only the two user stencil bits owned by this feature so
+            // portal masks can accumulate into 4, 8, or 12 every frame.
+            commandBuffer.DrawProcedural(
+                Matrix4x4.identity,
+                data.materials[0],
+                6,
+                MeshTopology.Triangles,
+                3,
+                1);
+
+            // Source first marks each portal quad and its separately generated
+            // near-plane stencil cap. Their independent bits accumulate so
+            // intersecting apertures can be handled as a distinct region.
+            for (int orderIndex = 0; orderIndex < PortalCount; ++orderIndex)
             {
+                int portalIndex = orderIndex == 0
+                    ? data.farPortalIndex
+                    : data.nearPortalIndex;
                 DrawRenderer(
                     commandBuffer, data.surfaces[portalIndex],
                     data.materials[portalIndex], 0);
@@ -195,10 +265,11 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
             // Source clears only the portal aperture's depth before drawing
             // the remote view. The RT camera has already rendered that view,
             // so clear the masked depth here before compositing its pixels.
-            for (int portalIndex = 0;
-                 portalIndex < PortalCount;
-                 ++portalIndex)
+            for (int orderIndex = 0; orderIndex < PortalCount; ++orderIndex)
             {
+                int portalIndex = orderIndex == 0
+                    ? data.farPortalIndex
+                    : data.nearPortalIndex;
                 if (data.textures[portalIndex] == null)
                     continue;
 
@@ -213,11 +284,15 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
 
             // Source recursively draws directly into the whole stencil
             // aperture. The Unity RT equivalent therefore composites a
-            // fullscreen triangle constrained by that portal's stencil ID.
-            for (int portalIndex = 0;
-                 portalIndex < PortalCount;
-                 ++portalIndex)
+            // fullscreen triangle constrained by that portal's stencil bit.
+            for (int orderIndex = 0; orderIndex < PortalCount; ++orderIndex)
             {
+                int portalIndex = orderIndex == 0
+                    ? data.farPortalIndex
+                    : data.nearPortalIndex;
+                if (data.fullyCoincident &&
+                    portalIndex != data.frontPortalIndex)
+                    continue;
                 if (data.textures[portalIndex] == null)
                     continue;
 
@@ -230,12 +305,29 @@ public sealed class PortalApertureRendererFeature : ScriptableRendererFeature
                     1);
             }
 
+            // A partial overlap uses the rear portal's material accent color.
+            // Full coincidence instead keeps the chosen front-facing view.
+            if (!data.fullyCoincident)
+            {
+                commandBuffer.DrawProcedural(
+                    Matrix4x4.identity,
+                    data.materials[0],
+                    5,
+                    MeshTopology.Triangles,
+                    3,
+                    1);
+            }
+
             // Match DrawPostStencilFixes: restore depth using the portal plane
             // and its separate DrawRenderFixMesh near-plane cap.
-            for (int portalIndex = 0;
-                 portalIndex < PortalCount;
-                 ++portalIndex)
+            for (int orderIndex = 0; orderIndex < PortalCount; ++orderIndex)
             {
+                int portalIndex = orderIndex == 0
+                    ? data.farPortalIndex
+                    : data.nearPortalIndex;
+                if (data.fullyCoincident &&
+                    portalIndex != data.frontPortalIndex)
+                    continue;
                 if (data.textures[portalIndex] == null)
                     continue;
 

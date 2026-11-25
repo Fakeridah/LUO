@@ -357,6 +357,54 @@ public class Portal : MonoBehaviour
         return portalColour;
     }
 
+    public Color GetOverlapMaterialColor(Color fallback)
+    {
+        if (IsVisibleAccentColor(portalColour))
+            return portalColour;
+
+        if (outlineRenderer != null &&
+            TryGetMaterialAccentColor(
+                outlineRenderer.sharedMaterial,
+                "_OutlineColour",
+                out Color outlineColor))
+            return outlineColor;
+
+        if (Renderer != null && Renderer.sharedMaterial != null)
+        {
+            Material surfaceMaterial = Renderer.sharedMaterial;
+            if (TryGetMaterialAccentColor(
+                    surfaceMaterial, "_BaseColor", out Color baseColor) ||
+                TryGetMaterialAccentColor(
+                    surfaceMaterial, "_Color", out baseColor) ||
+                TryGetMaterialAccentColor(
+                    surfaceMaterial, "_Colour", out baseColor))
+                return baseColor;
+        }
+
+        return fallback;
+    }
+
+    private static bool TryGetMaterialAccentColor(
+        Material material,
+        string propertyName,
+        out Color color)
+    {
+        color = Color.clear;
+        if (material == null || !material.HasProperty(propertyName))
+            return false;
+
+        color = material.GetColor(propertyName);
+        return IsVisibleAccentColor(color);
+    }
+
+    private static bool IsVisibleAccentColor(Color color)
+    {
+        float maximum = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
+        float minimum = Mathf.Min(color.r, Mathf.Min(color.g, color.b));
+        return color.a > 0.01f && maximum > 0.05f &&
+            maximum - minimum > 0.05f;
+    }
+
     public void SetMaskID(int id)
     {
         if (Renderer != null)
@@ -3683,7 +3731,14 @@ public class Portal : MonoBehaviour
             insideAtLeastOneHole = true;
             if (hole.Axis != faceAxis)
             {
-                sideBoundary = true;
+                // A hole only has side walls on the aperture axes. A union
+                // cell can also touch another hole's front/back plane here;
+                // treating every non-normal axis as a side wall creates a
+                // spurious cap across through-openings (often visible as a
+                // generated floor when portals overlap on a carved surface).
+                if (Mathf.Abs(faceValue - hole.Min[faceAxis]) <= epsilon ||
+                    Mathf.Abs(faceValue - hole.Max[faceAxis]) <= epsilon)
+                    sideBoundary = true;
                 continue;
             }
 

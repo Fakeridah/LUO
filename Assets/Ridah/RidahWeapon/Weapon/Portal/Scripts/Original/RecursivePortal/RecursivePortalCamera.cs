@@ -404,6 +404,159 @@ public class RecursivePortalCamera : MonoBehaviour
         return portalTexture != null;
     }
 
+    public void GetPortalRenderOrder(
+        Camera viewer,
+        out int farPortalIndex,
+        out int nearPortalIndex)
+    {
+        nearPortalIndex = GetFrontPortalIndex(viewer);
+        farPortalIndex = 1 - nearPortalIndex;
+    }
+
+    public bool ArePortalAperturesCoincident(
+        Camera viewer,
+        out int frontPortalIndex)
+    {
+        frontPortalIndex = GetFrontPortalIndex(viewer);
+        if (portals == null || portals.Length < PortalCount ||
+            portals[0] == null || portals[1] == null ||
+            portals[0].otherPortal != portals[1] ||
+            !Portal.IsPortalPairActive(portals[0]) ||
+            portals[0].Renderer == null || portals[1].Renderer == null)
+            return false;
+
+        const float cornerTolerance = 0.001f;
+        float toleranceSquared = cornerTolerance * cornerTolerance;
+        Bounds bounds0 = portals[0].Renderer.localBounds;
+        Bounds bounds1 = portals[1].Renderer.localBounds;
+        int matchedCorners = 0;
+        for (int cornerA = 0; cornerA < 4; ++cornerA)
+        {
+            Vector3 pointA = GetApertureCornerWorld(
+                portals[0], bounds0, cornerA);
+            for (int cornerB = 0; cornerB < 4; ++cornerB)
+            {
+                int cornerBit = 1 << cornerB;
+                if ((matchedCorners & cornerBit) != 0)
+                    continue;
+
+                Vector3 pointB = GetApertureCornerWorld(
+                    portals[1], bounds1, cornerB);
+                if ((pointA - pointB).sqrMagnitude <= toleranceSquared)
+                {
+                    matchedCorners |= cornerBit;
+                    break;
+                }
+            }
+        }
+
+        if (matchedCorners != 0xF)
+            return false;
+
+        frontPortalIndex = GetCoincidentFrontPortalIndex(viewer);
+        return true;
+    }
+
+    public Color GetOverlapMaterialColor(
+        int frontPortalIndex,
+        Color fallback)
+    {
+        int otherPortalIndex = 1 - Mathf.Clamp(frontPortalIndex, 0, 1);
+        Portal overlapPortal = portals != null &&
+            otherPortalIndex < portals.Length
+                ? portals[otherPortalIndex]
+                : null;
+        return overlapPortal != null
+            ? overlapPortal.GetOverlapMaterialColor(fallback)
+            : fallback;
+    }
+
+    private int GetFrontPortalIndex(Camera viewer)
+    {
+        if (viewer == null || portals == null || portals.Length < PortalCount ||
+            portals[0] == null || portals[1] == null)
+            return 0;
+
+        Transform view = viewer.transform;
+        float depth0 = Vector3.Dot(
+            view.forward, portals[0].transform.position - view.position);
+        float depth1 = Vector3.Dot(
+            view.forward, portals[1].transform.position - view.position);
+        if (Mathf.Abs(depth0 - depth1) > 0.0001f)
+            return depth0 < depth1 ? 0 : 1;
+
+        Vector3 toPortal0 = portals[0].transform.position - view.position;
+        Vector3 toPortal1 = portals[1].transform.position - view.position;
+        float facing0 = toPortal0.sqrMagnitude > 0.000001f
+            ? Vector3.Dot(
+                Portal.GetPortalPlaneNormal(portals[0]).normalized,
+                -toPortal0.normalized)
+            : 0f;
+        float facing1 = toPortal1.sqrMagnitude > 0.000001f
+            ? Vector3.Dot(
+                Portal.GetPortalPlaneNormal(portals[1]).normalized,
+                -toPortal1.normalized)
+            : 0f;
+        if (Mathf.Abs(facing0 - facing1) > 0.001f)
+            return facing0 > facing1 ? 0 : 1;
+
+        // Stable tie-break for coincident portals with matching orientation.
+        return 0;
+    }
+
+    private int GetCoincidentFrontPortalIndex(Camera viewer)
+    {
+        if (viewer == null || portals == null || portals.Length < PortalCount ||
+            portals[0] == null || portals[1] == null)
+            return 0;
+
+        Vector3 viewPosition = viewer.transform.position;
+        Vector3 toPortal0 = GetApertureCenterWorld(portals[0]) - viewPosition;
+        Vector3 toPortal1 = GetApertureCenterWorld(portals[1]) - viewPosition;
+        float facing0 = toPortal0.sqrMagnitude > 0.000001f
+            ? Vector3.Dot(
+                Portal.GetPortalPlaneNormal(portals[0]).normalized,
+                -toPortal0.normalized)
+            : 0f;
+        float facing1 = toPortal1.sqrMagnitude > 0.000001f
+            ? Vector3.Dot(
+                Portal.GetPortalPlaneNormal(portals[1]).normalized,
+                -toPortal1.normalized)
+            : 0f;
+        if (Mathf.Abs(facing0 - facing1) > 0.001f)
+            return facing0 > facing1 ? 0 : 1;
+
+        float depth0 = Vector3.Dot(
+            viewer.transform.forward, toPortal0);
+        float depth1 = Vector3.Dot(
+            viewer.transform.forward, toPortal1);
+        if (Mathf.Abs(depth0 - depth1) > 0.0001f)
+            return depth0 < depth1 ? 0 : 1;
+
+        return 0;
+    }
+
+    private static Vector3 GetApertureCenterWorld(Portal portal)
+    {
+        Bounds bounds = portal.Renderer.localBounds;
+        return portal.transform.TransformPoint(bounds.center);
+    }
+
+    private static Vector3 GetApertureCornerWorld(
+        Portal portal,
+        Bounds bounds,
+        int cornerIndex)
+    {
+        float x = (cornerIndex & 1) == 0
+            ? bounds.min.x
+            : bounds.max.x;
+        float y = (cornerIndex & 2) == 0
+            ? bounds.min.y
+            : bounds.max.y;
+        return portal.transform.TransformPoint(
+            new Vector3(x, y, bounds.center.z));
+    }
+
     private void OnEnable()
     {
         Active = this;

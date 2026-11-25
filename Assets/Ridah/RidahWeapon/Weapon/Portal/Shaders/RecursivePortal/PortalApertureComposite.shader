@@ -4,6 +4,12 @@ Shader "Hidden/Ridah/PortalApertureComposite"
     {
         _MainTex("Portal View", 2D) = "black" {}
         _PortalStencilRef("Portal Stencil Reference", Float) = 64
+        _PortalStencilWriteMask("Portal Stencil Write Mask", Float) = 12
+        _PortalCompositeStencilRef("Composite Stencil Reference", Float) = 4
+        _PortalCompositeStencilReadMask("Composite Stencil Read Mask", Float) = 12
+        _PortalDepthStencilRef("Depth Stencil Reference", Float) = 4
+        _PortalDepthStencilReadMask("Depth Stencil Read Mask", Float) = 4
+        _OverlapColor("Portal Overlap Color", Color) = (0, 0.5843, 1, 1)
     }
 
     SubShader
@@ -22,7 +28,7 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             {
                 Ref [_PortalStencilRef]
                 ReadMask 12
-                WriteMask 12
+                WriteMask [_PortalStencilWriteMask]
                 Comp Always
                 Pass Replace
                 Fail Keep
@@ -67,8 +73,8 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             ColorMask RGBA
             Stencil
             {
-                Ref [_PortalStencilRef]
-                ReadMask 12
+                Ref [_PortalCompositeStencilRef]
+                ReadMask [_PortalCompositeStencilReadMask]
                 WriteMask 0
                 Comp Equal
                 Pass Keep
@@ -125,8 +131,8 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             ColorMask 0
             Stencil
             {
-                Ref [_PortalStencilRef]
-                ReadMask 12
+                Ref [_PortalDepthStencilRef]
+                ReadMask [_PortalDepthStencilReadMask]
                 WriteMask 0
                 Comp Equal
                 Pass Keep
@@ -175,8 +181,8 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             ColorMask 0
             Stencil
             {
-                Ref [_PortalStencilRef]
-                ReadMask 12
+                Ref [_PortalDepthStencilRef]
+                ReadMask [_PortalDepthStencilReadMask]
                 WriteMask 0
                 Comp Equal
                 Pass Keep
@@ -226,7 +232,7 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             {
                 Ref [_PortalStencilRef]
                 ReadMask 12
-                WriteMask 12
+                WriteMask [_PortalStencilWriteMask]
                 Comp Always
                 Pass Replace
                 Fail Keep
@@ -256,6 +262,100 @@ Shader "Hidden/Ridah/PortalApertureComposite"
             }
 
             half4 FragMask(Varyings input) : SV_Target
+            {
+                return 0;
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "CompositePortalOverlapColor"
+            Cull Off
+            ZWrite Off
+            ZTest Always
+            ColorMask RGBA
+            Stencil
+            {
+                Ref 12
+                ReadMask 12
+                WriteMask 0
+                Comp Equal
+                Pass Keep
+                Fail Keep
+                ZFail Keep
+            }
+
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex VertFullscreen
+            #pragma fragment FragOverlapColor
+            #include "UnityCG.cginc"
+
+            float4 _OverlapColor;
+
+            struct FullscreenVaryings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+            FullscreenVaryings VertFullscreen(uint vertexID : SV_VertexID)
+            {
+                FullscreenVaryings output;
+                float2 position = float2(
+                    (vertexID << 1) & 2,
+                    vertexID & 2);
+                output.positionCS = float4(position * 2.0 - 1.0, 0.0, 1.0);
+                return output;
+            }
+
+            half4 FragOverlapColor(FullscreenVaryings input) : SV_Target
+            {
+                return _OverlapColor;
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "ClearPortalStencilBits"
+            Cull Off
+            ZWrite Off
+            ZTest Always
+            ColorMask 0
+            Stencil
+            {
+                Ref 0
+                ReadMask 12
+                WriteMask 12
+                Comp Always
+                Pass Replace
+                Fail Keep
+                ZFail Keep
+            }
+
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex VertFullscreen
+            #pragma fragment FragClearStencil
+            #include "UnityCG.cginc"
+
+            struct FullscreenVaryings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+            FullscreenVaryings VertFullscreen(uint vertexID : SV_VertexID)
+            {
+                FullscreenVaryings output;
+                float2 position = float2(
+                    (vertexID << 1) & 2,
+                    vertexID & 2);
+                output.positionCS = float4(position * 2.0 - 1.0, 0.0, 1.0);
+                return output;
+            }
+
+            half4 FragClearStencil(FullscreenVaryings input) : SV_Target
             {
                 return 0;
             }
