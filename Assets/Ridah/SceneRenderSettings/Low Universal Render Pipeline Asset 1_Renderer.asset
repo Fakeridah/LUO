@@ -96,10 +96,9 @@ MonoBehaviour:
   - {fileID: 8349903364038254838}
   - {fileID: 4599357210464142552}
   - {fileID: 6492933753689903648}
-  - {fileID: 5532757183175629547}
   - {fileID: 2452311754677147779}
   - {fileID: -1901335407329590259}
-  m_RendererFeatureMap: e4aac6ff68046f8aad548c8dbc60bb186884983e634cc9f2f6e056b2ded0e073d8c4d8b40333d43f2092d412d9881b5aeb9aac23584dc84c83d80b488c5c08220d443f4f85199de5l
+  m_RendererFeatureMap: e4aac6ff68046f8aad548c8dbc60bb186884983e634cc9f2f6e056b2ded0e073d8c4d8b40333d43f2092d412d9881b5a83d80b488c5c08220d443f4f85199de5l
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   m_AssetVersion: 3
@@ -240,80 +239,6 @@ MonoBehaviour:
       offset: {x: 0, y: 0, z: 0, w: 0}
       cameraFieldOfView: 60
     depthInputAttachment: 0
---- !u!114 &5532757183175629547
-MonoBehaviour:
-  m_ObjectHideFlags: 1
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d9d225a4cad17704386835b918c7b8ec, type: 3}
-  m_Name: BlitVolumeFogSRP
-  m_EditorClassIdentifier: 
-  m_Active: 1
-  settings:
-    extraCameraID: 0
-    isForDualCameras: 1
-    isForReflections: 1
-    blendVolumeLighting: 0
-    _FogColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
-    noiseTexture: {fileID: 2800000, guid: 41e8b07bd5f650642a234c5a20002c64, type: 3}
-    _startDistance: 30
-    _fogHeight: 0.75
-    _fogDensity: 1
-    _cameraRoll: 0
-    _cameraDiff: {x: 0, y: 0, z: 0, w: 0}
-    _cameraTiltSign: 1
-    heightDensity: 1
-    noiseDensity: 1
-    noiseScale: 1
-    noiseThickness: 1
-    noiseSpeed: {x: 1, y: 1, z: 1}
-    occlusionDrop: 1
-    occlusionExp: 1
-    noise3D: 1
-    startDistance: 1
-    luminance: 1
-    lumFac: 1
-    ScatterFac: 1
-    TurbFac: 1
-    HorizFac: 1
-    turbidity: 1
-    reileigh: 1
-    mieCoefficient: 1
-    mieDirectionalG: 1
-    bias: 1
-    contrast: 1
-    TintColor: {r: 1, g: 1, b: 1, a: 1}
-    TintColorK: {x: 0, y: 0, z: 0}
-    TintColorL: {x: 0, y: 0, z: 0}
-    Sun: {x: 0, y: 0, z: 0, w: 0}
-    FogSky: 1
-    ClearSkyFac: 1
-    PointL: {x: 0, y: 0, z: 0, w: 0}
-    PointLParams: {x: 0, y: 0, z: 0, w: 0}
-    _useRadialDistance: 0
-    _fadeToSkybox: 1
-    inheritFromController: 1
-    enableFog: 1
-    Event: 400
-    blitMaterial: {fileID: 2100000, guid: a8568e1a8beabd648ac8c844140e2163, type: 2}
-    blitMaterialPassIndex: -1
-    destination: 0
-    textureId: _BlitPassTexture
-    blend: 0.5
-    resolution: 1
-    screenBlendMode: 0
-    sunTransform: {x: 0, y: 0, z: 0}
-    radialBlurIterations: 2
-    sunColor: {r: 1, g: 1, b: 1, a: 1}
-    sunThreshold: {r: 0.87, g: 0.74, b: 0.65, a: 1}
-    sunShaftBlurRadius: 2.5
-    sunShaftIntensity: 1.15
-    maxRadius: 0.75
-    useDepthTexture: 1
 --- !u!114 &6492933753689903648
 MonoBehaviour:
   m_ObjectHideFlags: 1

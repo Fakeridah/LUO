@@ -22,6 +22,11 @@ Shader "Portals/PortalMask"
 		Name "Mask"
 			// The aperture samples a rendered view directly. A fixed stencil
 			// reference cannot represent Source's per-view masks and clobbers URP.
+			// Recursive portal cameras do not run the main-camera aperture
+			// composite pass, so this surface must win depth ties with its host
+			// wall. Without the bias, grazing views reveal the coplanar wall as
+			// long alternating bars across the portal image.
+			Offset -1, -1
 			HLSLPROGRAM
 			#pragma vertex vert
 			#pragma fragment frag

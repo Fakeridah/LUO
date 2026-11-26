@@ -64,6 +64,7 @@ public class RecursivePortalCamera : MonoBehaviour
     private readonly List<Vector3> portalViewPositions = new List<Vector3>();
     private readonly List<Quaternion> portalViewRotations =
         new List<Quaternion>();
+    private readonly List<int> portalViewEntryIndices = new List<int>();
     private readonly List<Vector3> nearCapPolygon = new List<Vector3>(12);
     private readonly List<Vector3> nearCapScratch = new List<Vector3>(12);
     private readonly List<Vector3> nearCapLocalVertices = new List<Vector3>(12);
@@ -932,34 +933,49 @@ public class RecursivePortalCamera : MonoBehaviour
         // its own URP render request corrupts culling state at deeper levels.
         portalViewPositions.Clear();
         portalViewRotations.Clear();
+        portalViewEntryIndices.Clear();
         if (portalViewPositions.Capacity < allocatedDepth)
             portalViewPositions.Capacity = allocatedDepth;
         if (portalViewRotations.Capacity < allocatedDepth)
             portalViewRotations.Capacity = allocatedDepth;
+        if (portalViewEntryIndices.Capacity < allocatedDepth)
+            portalViewEntryIndices.Capacity = allocatedDepth;
         Vector3 currentPosition = sourcePosition;
         Quaternion currentRotation = sourceRotation;
+        int currentEntryIndex = entryIndex;
 
         for (int depth = recursionLevel; depth < allocatedDepth; ++depth)
         {
+            Portal currentEntryPortal = portals[currentEntryIndex];
+            Portal currentExitPortal = currentEntryPortal != null
+                ? currentEntryPortal.otherPortal
+                : null;
+            if (currentExitPortal == null || !currentExitPortal.isPlaced)
+                break;
+
             GetTransformedCameraPose(
-                entryPortal, exitPortal, currentPosition, currentRotation,
+                currentEntryPortal, currentExitPortal,
+                currentPosition, currentRotation,
                 out Vector3 virtualPosition, out Quaternion virtualRotation);
             portalViewPositions.Add(virtualPosition);
             portalViewRotations.Add(virtualRotation);
+            portalViewEntryIndices.Add(currentEntryIndex);
 
             ConfigurePortalCamera(
-                exitPortal, virtualPosition, virtualRotation);
+                currentExitPortal, virtualPosition, virtualRotation);
+            int nextEntryIndex = currentExitPortal == portals[0] ? 0 :
+                currentExitPortal == portals[1] ? 1 : -1;
             if (depth + 1 >= allocatedDepth ||
+                nextEntryIndex < 0 ||
                 !ShouldUpdatePortalView(
-                    entryPortal, portalCamera, depth + 1))
+                    currentEntryPortal, portalCamera, depth + 1))
                 break;
 
             currentPosition = virtualPosition;
             currentRotation = virtualRotation;
+            currentEntryIndex = nextEntryIndex;
         }
 
-        Renderer entrySurface = entryPortal.Renderer;
-        Renderer exitSurface = exitPortal.Renderer;
         bool aperturesCoincident = ArePortalAperturesCoincident(
             sourceViewCamera, out _);
 
@@ -967,23 +983,35 @@ public class RecursivePortalCamera : MonoBehaviour
              viewIndex >= 0; --viewIndex)
         {
             int absoluteDepth = recursionLevel + viewIndex;
+            int viewEntryIndex = portalViewEntryIndices[viewIndex];
+            Portal viewEntryPortal = portals[viewEntryIndex];
+            Portal viewExitPortal = viewEntryPortal != null
+                ? viewEntryPortal.otherPortal
+                : null;
+            if (viewExitPortal == null)
+                continue;
+
+            Renderer entrySurface = viewEntryPortal.Renderer;
+            Renderer exitSurface = viewExitPortal.Renderer;
             ConfigurePortalCamera(
-                exitPortal,
+                viewExitPortal,
                 portalViewPositions[viewIndex],
                 portalViewRotations[viewIndex]);
             portalCamera.targetTexture =
-                portalTextures[entryIndex, absoluteDepth];
+                portalTextures[viewEntryIndex, absoluteDepth];
 
-            Texture previousEntryTexture = GetPortalTexture(entryIndex);
+            Texture previousEntryTexture =
+                GetPortalTexture(viewEntryIndex);
             bool entrySurfaceWasEnabled =
                 entrySurface != null && entrySurface.enabled;
             bool exitSurfaceWasEnabled =
                 exitSurface != null && exitSurface.enabled;
             Texture childTexture = viewIndex + 1 < portalViewPositions.Count
-                ? (Texture)portalTextures[entryIndex, absoluteDepth + 1]
+                ? (Texture)portalTextures[
+                    portalViewEntryIndices[viewIndex + 1], absoluteDepth + 1]
                 : terminalStaticTexture;
 
-            BindPortalTexture(entryIndex, childTexture);
+            BindPortalTexture(viewEntryIndex, childTexture);
             if (aperturesCoincident && entrySurface != null)
                 entrySurface.enabled = false;
             if (exitSurface != null)
@@ -1009,7 +1037,7 @@ public class RecursivePortalCamera : MonoBehaviour
                 portalCamera.cullingMask = previousCullingMask;
                 if (entrySurface != null)
                 {
-                    BindPortalTexture(entryIndex, previousEntryTexture);
+                    BindPortalTexture(viewEntryIndex, previousEntryTexture);
                     entrySurface.enabled = entrySurfaceWasEnabled;
                 }
                 if (exitSurface != null)
