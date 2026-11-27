@@ -1,10 +1,18 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using RidahFPS.Controllers;
 
 [RequireComponent(typeof(Collider))]
 public class Portal : MonoBehaviour
 {
+    private sealed class PortalBackfaceRenderState
+    {
+        public Camera camera;
+        public Renderer[] renderers;
+        public bool[] forceRenderingOff;
+    }
+
     private static readonly List<Portal> ActivePortals = new List<Portal>();
     private static long nextPlacementSequence;
     private long placementSequence;
@@ -259,6 +267,10 @@ public class Portal : MonoBehaviour
     private bool[] coincidentOverlapRendererEnabledStates;
     private bool coincidentOverlapVisualsSuppressed;
     private Renderer[] portalEffectRenderers;
+    private Renderer[] portalSideFilterRenderers;
+    private readonly List<PortalBackfaceRenderState>
+        portalBackfaceRenderStates =
+            new List<PortalBackfaceRenderState>(4);
     private int[] portalEffectOriginalSortingOrders;
     private bool portalEffectSortOrderOverridden;
     private bool portalEffectRendersAfterPartner;
@@ -304,6 +316,10 @@ public class Portal : MonoBehaviour
     {
         if (!ActivePortals.Contains(this))
             ActivePortals.Add(this);
+        RenderPipelineManager.beginCameraRendering +=
+            ApplyPortalBackfaceFilter;
+        RenderPipelineManager.endCameraRendering +=
+            RestorePortalBackfaceFilter;
         if (isPlaced && placementSequence == 0)
             placementSequence = ++nextPlacementSequence;
         itemLayerSceneScanComplete = false;
@@ -311,6 +327,11 @@ public class Portal : MonoBehaviour
 
     private void OnDisable()
     {
+        RenderPipelineManager.beginCameraRendering -=
+            ApplyPortalBackfaceFilter;
+        RenderPipelineManager.endCameraRendering -=
+            RestorePortalBackfaceFilter;
+        RestoreAllPortalBackfaceFilters();
         SetCoincidentOverlapVisualsSuppressed(false);
         SetPortalEffectRenderOrder(false, false);
         ActivePortals.Remove(this);
@@ -514,6 +535,112 @@ public class Portal : MonoBehaviour
             Renderer target = portalEffectRenderers[i];
             portalEffectOriginalSortingOrders[i] =
                 target != null ? target.sortingOrder : 0;
+        }
+
+        // Keep the portal image one-sided while allowing PortalWhite and
+        // PortalBlack VFX to render from either side of their mesh.
+        portalSideFilterRenderers = Renderer != null
+            ? new[] { Renderer }
+            : System.Array.Empty<Renderer>();
+    }
+
+    private void ApplyPortalBackfaceFilter(
+        ScriptableRenderContext context,
+        Camera camera)
+    {
+        if (camera == null || !isPlaced ||
+            portalSideFilterRenderers == null)
+            return;
+
+        Vector3 planeNormal = GetPortalPlaneNormal(this);
+        bool cameraBehindPortal = Vector3.Dot(
+            planeNormal, camera.transform.position - transform.position) <= 0f;
+
+        var state = new PortalBackfaceRenderState
+        {
+            camera = camera,
+            renderers = portalSideFilterRenderers,
+            forceRenderingOff =
+                new bool[portalSideFilterRenderers.Length]
+        };
+
+        for (int i = 0; i < state.renderers.Length; ++i)
+        {
+            Renderer target = state.renderers[i];
+            if (target == null)
+                continue;
+
+            bool previousState = target.forceRenderingOff;
+            state.forceRenderingOff[i] = previousState;
+            bool cameraIndependentState = GetCameraIndependentRenderState(
+                target, previousState);
+            target.forceRenderingOff = cameraIndependentState ||
+                cameraBehindPortal;
+        }
+
+        portalBackfaceRenderStates.Add(state);
+    }
+
+    private bool GetCameraIndependentRenderState(
+        Renderer target,
+        bool currentState)
+    {
+        // Camera renders can nest when the recursive portal camera submits a
+        // view while the gameplay camera is beginning its own render. Use the
+        // state from before the outermost filter so the nested camera can
+        // independently choose the correct side of each portal.
+        for (int stateIndex = 0;
+             stateIndex < portalBackfaceRenderStates.Count;
+             ++stateIndex)
+        {
+            PortalBackfaceRenderState state =
+                portalBackfaceRenderStates[stateIndex];
+            for (int rendererIndex = 0;
+                 rendererIndex < state.renderers.Length;
+                 ++rendererIndex)
+            {
+                if (state.renderers[rendererIndex] == target)
+                    return state.forceRenderingOff[rendererIndex];
+            }
+        }
+
+        return currentState;
+    }
+
+    private void RestorePortalBackfaceFilter(
+        ScriptableRenderContext context,
+        Camera camera)
+    {
+        for (int stateIndex = portalBackfaceRenderStates.Count - 1;
+             stateIndex >= 0;
+             --stateIndex)
+        {
+            PortalBackfaceRenderState state =
+                portalBackfaceRenderStates[stateIndex];
+            if (state.camera != camera)
+                continue;
+
+            RestorePortalBackfaceState(state);
+            portalBackfaceRenderStates.RemoveAt(stateIndex);
+            return;
+        }
+    }
+
+    private void RestoreAllPortalBackfaceFilters()
+    {
+        for (int i = portalBackfaceRenderStates.Count - 1; i >= 0; --i)
+            RestorePortalBackfaceState(portalBackfaceRenderStates[i]);
+        portalBackfaceRenderStates.Clear();
+    }
+
+    private static void RestorePortalBackfaceState(
+        PortalBackfaceRenderState state)
+    {
+        for (int i = 0; i < state.renderers.Length; ++i)
+        {
+            Renderer target = state.renderers[i];
+            if (target != null)
+                target.forceRenderingOff = state.forceRenderingOff[i];
         }
     }
 

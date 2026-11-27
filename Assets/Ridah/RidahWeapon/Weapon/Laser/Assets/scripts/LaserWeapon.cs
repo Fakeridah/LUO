@@ -32,8 +32,7 @@ namespace Ridah.Weapon
         Vector3 laserdirection;
         List<GameObject> laserlines;
         List<GameObject> laserVFXs;
-        private LaserPool laserPool;
-        private LaserPool vfxPool;
+        private VisualEffect[] impactVisualEffects;
         private readonly RaycastHit[] raycastHits = new RaycastHit[64];
         int index = 0;
         Vector3 lastHitPos= Vector3.zero;
@@ -48,33 +47,20 @@ namespace Ridah.Weapon
         {
             cameraTrans = Camera.main.transform;
             laserdirection = laserstartpoint.forward;
-            laserlines = new List<GameObject>();
-            laserPool = new LaserPool();
-            laserPool.laserPrefab = laserPrefab;
-            laserPool.start();
-            for (int i = 0; i < maxLaserLines; i++)
+            RemoveLegacyPrewarmedClones();
+            maxLaserLines = Mathf.Clamp(maxLaserLines, 2, 500);
+            laserlines = new List<GameObject>(4);
+            laserVFXs = new List<GameObject>(4);
+
+            HideVfxTemplates();
+
+            if (sparkVFX != null)
             {
-                laserlines.Add(laserPool.laserPool.Get());
-                laserlines[i].transform.SetParent(transform);
-                laserlines[i].SetActive(false);
+                impactVisualEffects = sparkVFX.GetComponentsInChildren<VisualEffect>(true);
+                StopImpactVfx();
             }
 
-            laserVFXs = new List<GameObject>();
-            vfxPool = new LaserPool();
-            vfxPool.laserPrefab = crossoverVFX;
-            vfxPool.start();
-            for (int i = 0; i < maxLaserLines; i++)
-            {
-                laserVFXs.Add(vfxPool.laserPool.Get());
-                laserVFXs[i].transform.SetParent(transform);
-                laserVFXs[i].SetActive(false);
-            }
-            if (isWeapon)
-            {
-                laserlines[0].GetComponent<LineRenderer>().startWidth = .07f;
-                laserlines[0].GetComponent<LineRenderer>().endWidth = .07f;
-                laserVFXs[0].transform.localScale = laserVFXs[0].transform.localScale / 5f;
-            }
+            DisableLaserVfxShadows();
         }
         void Update()
         {
@@ -82,6 +68,14 @@ namespace Ridah.Weapon
             else triggerLaser();
             lastHitExist = true;
         }
+
+        private void OnDisable()
+        {
+            StopImpactVfx();
+            DestroyLaserObjects();
+            HideVfxTemplates();
+        }
+
         void weaponLaser()
         {
             if (Input.GetMouseButton(0) && lockShoot)
@@ -122,18 +116,9 @@ namespace Ridah.Weapon
             }
             else
             {
-
-                sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Stop();
-                foreach (var item in laserlines)
-                {
-                    item.SetActive(false);
-                    item.transform.SetParent(transform);
-                }
-                foreach (var item in laserVFXs)
-                {
-                    item.SetActive(false);
-                    item.transform.SetParent(transform);
-                }
+                StopImpactVfx();
+                HideVfxTemplates();
+                DestroyLaserObjects();
             }
         }
         void triggerLaser()
@@ -151,7 +136,7 @@ namespace Ridah.Weapon
                 item.SetActive(false);
                 item.transform.SetParent(transform);
             }
-            sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Stop();
+            StopImpactVfx();
             DebugRay dr = new DebugRay(laserstartpoint.position, laserdirection);
             drCast(dr);
             if (lastHitPos != null && lastHitExist)
@@ -163,6 +148,9 @@ namespace Ridah.Weapon
         
         public void drCast(DebugRay dr)
         {
+            if (!EnsureLaserObjects(index))
+                return;
+
             laserlines[index].GetComponent<LineRenderer>().positionCount = 2;
             laserlines[index].GetComponent<LineRenderer>().SetPosition(0, dr.startPos);
             laserVFXs[index].transform.position = dr.startPos;
@@ -194,14 +182,20 @@ namespace Ridah.Weapon
                 {
                     if(hit.transform.GetComponent<LaserManager>())
                     hit.transform.GetComponent<LaserManager>().isEmit = false;
-                    laserVFXs[index].transform.position = hit.point;
-                    laserVFXs[index].SetActive(true);
+                    if (EnsureLaserObjects(index))
+                    {
+                        laserVFXs[index].transform.position = hit.point;
+                        laserVFXs[index].SetActive(true);
+                    }
                     PlaceAndPlayImpactVfx(hit.point, hit.normal);
                 }
                 else
                 {
-                    laserVFXs[index].transform.position = hit.point;
-                    laserVFXs[index].SetActive(true);
+                    if (EnsureLaserObjects(index))
+                    {
+                        laserVFXs[index].transform.position = hit.point;
+                        laserVFXs[index].SetActive(true);
+                    }
                     PlaceAndPlayImpactVfx(hit.point, hit.normal);
                 }
                 if (index - 1 >= 0)
@@ -217,22 +211,163 @@ namespace Ridah.Weapon
                 Vector3 endPos = dr.startPos + dr.dir * 100;
                 laserlines[index - 1].GetComponent<LineRenderer>().SetPosition(0, dr.startPos);
                 laserlines[index - 1].GetComponent<LineRenderer>().SetPosition(1, endPos);
-                if (index < laserVFXs.Count)
+                if (EnsureLaserObjects(index))
                 {
                     laserVFXs[index].transform.position = endPos;
                     laserVFXs[index].SetActive(true);
                 }
                 lastHitExist = false;
-                sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Stop();
+                StopImpactVfx();
             }
             index--;
         }
 
+        private bool EnsureLaserObjects(int itemIndex)
+        {
+            if (itemIndex < 0 || itemIndex >= maxLaserLines ||
+                laserPrefab == null || crossoverVFX == null ||
+                laserlines == null || laserVFXs == null)
+                return false;
+
+            while (laserlines.Count <= itemIndex)
+            {
+                int newIndex = laserlines.Count;
+                GameObject line = Instantiate(laserPrefab);
+                GameObject marker = Instantiate(crossoverVFX);
+
+                if (line == null || marker == null)
+                {
+                    if (line != null) line.SetActive(false);
+                    if (marker != null) marker.SetActive(false);
+                    return false;
+                }
+
+                line.transform.SetParent(transform);
+                marker.transform.SetParent(transform);
+                line.SetActive(false);
+                marker.SetActive(false);
+
+                if (isWeapon && newIndex == 0)
+                {
+                    LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
+                    if (lineRenderer != null)
+                    {
+                        lineRenderer.startWidth = .07f;
+                        lineRenderer.endWidth = .07f;
+                    }
+                    marker.transform.localScale /= 5f;
+                }
+
+                laserlines.Add(line);
+                laserVFXs.Add(marker);
+                DisableRendererShadows(line);
+                DisableRendererShadows(marker);
+            }
+
+            return true;
+        }
+
+        private void DestroyLaserObjects()
+        {
+            DestroyLaserObjects(laserlines);
+            DestroyLaserObjects(laserVFXs);
+            laserlines?.Clear();
+            laserVFXs?.Clear();
+        }
+
+        private void DestroyLaserObjects(List<GameObject> objects)
+        {
+            if (objects == null)
+                return;
+
+            foreach (GameObject item in objects)
+            {
+                if (item == null)
+                    continue;
+
+                item.SetActive(false);
+                Destroy(item);
+            }
+        }
+
+        private void HideVfxTemplates()
+        {
+            if (laserPrefab != null)
+                laserPrefab.SetActive(false);
+            if (crossoverVFX != null)
+                crossoverVFX.SetActive(false);
+
+            foreach (Transform child in transform)
+            {
+                if (child.gameObject == laserPrefab || child.gameObject == crossoverVFX ||
+                    string.Equals(child.name, "crossvfx", System.StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(child.name, "crossfx", System.StringComparison.OrdinalIgnoreCase))
+                    child.gameObject.SetActive(false);
+            }
+        }
+
+        private void RemoveLegacyPrewarmedClones()
+        {
+            string lineCloneName = laserPrefab != null ? laserPrefab.name + "(Clone)" : null;
+            string markerCloneName = crossoverVFX != null ? crossoverVFX.name + "(Clone)" : null;
+
+            for (int i = transform.childCount - 1; i >= 0; i--)
+            {
+                Transform child = transform.GetChild(i);
+                if (child.name == lineCloneName || child.name == markerCloneName)
+                {
+                    child.gameObject.SetActive(false);
+                    Destroy(child.gameObject);
+                }
+            }
+        }
+
+        private void DisableLaserVfxShadows()
+        {
+            DisableRendererShadows(gameObject);
+        }
+
+        private static void DisableRendererShadows(GameObject target)
+        {
+            foreach (Renderer renderer in target.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer != null)
+                    renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            }
+        }
+
         private void PlaceAndPlayImpactVfx(Vector3 position, Vector3 normal)
         {
+            if (sparkVFX == null)
+                return;
+
             sparkVFX.transform.position = position;
             sparkVFX.transform.LookAt(position + normal);
-            sparkVFX.transform.GetChild(0).GetComponent<VisualEffect>().Play();
+            sparkVFX.SetActive(true);
+
+            if (impactVisualEffects != null)
+            {
+                foreach (VisualEffect effect in impactVisualEffects)
+                {
+                    if (effect != null)
+                        effect.Play();
+                }
+            }
+        }
+
+        private void StopImpactVfx()
+        {
+            if (impactVisualEffects != null)
+            {
+                foreach (VisualEffect effect in impactVisualEffects)
+                {
+                    if (effect != null)
+                        effect.Stop();
+                }
+            }
+
+            if (sparkVFX != null)
+                sparkVFX.SetActive(false);
         }
 
         private bool RaycastIgnoringOwner(Vector3 origin, Vector3 direction, out RaycastHit closestHit)

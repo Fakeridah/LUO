@@ -37,7 +37,7 @@ MonoBehaviour:
       normalBlend: 0
 --- !u!114 &-5160950855675639382
 MonoBehaviour:
-  m_ObjectHideFlags: 1
+  m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
@@ -77,7 +77,6 @@ MonoBehaviour:
       restoreCamera: 1
       offset: {x: 0, y: 0, z: 0, w: 0}
       cameraFieldOfView: 60
-    depthInputAttachment: 0
 --- !u!114 &-3205299196613410701
 MonoBehaviour:
   m_ObjectHideFlags: 1
@@ -198,7 +197,7 @@ MonoBehaviour:
     SampleCount: -1
 --- !u!114 &5801854681913248193
 MonoBehaviour:
-  m_ObjectHideFlags: 1
+  m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
@@ -238,7 +237,6 @@ MonoBehaviour:
       restoreCamera: 1
       offset: {x: 0, y: 0, z: 0, w: 0}
       cameraFieldOfView: 60
-    depthInputAttachment: 0
 --- !u!114 &7346286934922136816
 MonoBehaviour:
   m_ObjectHideFlags: 1

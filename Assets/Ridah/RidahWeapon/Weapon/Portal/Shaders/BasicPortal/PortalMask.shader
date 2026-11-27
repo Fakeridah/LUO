@@ -9,7 +9,7 @@ Shader "Portals/PortalMask"
         Tags
 		{ 
 			"RenderType" = "Opaque" 
-			"Queue" = "Geometry" 
+			"Queue" = "Geometry+1"
 			"RenderPipeline" = "UniversalPipeline"
 		}
 		
@@ -20,13 +20,14 @@ Shader "Portals/PortalMask"
         Pass
         {
 		Name "Mask"
+			Cull Back
+			ZTest LEqual
+			ZWrite Off
+			// Resolve the aperture against its coplanar host wall without
+			// writing biased depth that could hide PortalWhite/PortalBlack.
+			Offset -1, -1
 			// The aperture samples a rendered view directly. A fixed stencil
 			// reference cannot represent Source's per-view masks and clobbers URP.
-			// Recursive portal cameras do not run the main-camera aperture
-			// composite pass, so this surface must win depth ties with its host
-			// wall. Without the bias, grazing views reveal the coplanar wall as
-			// long alternating bars across the portal image.
-			Offset -1, -1
 			HLSLPROGRAM
 			#pragma vertex vert
 			#pragma fragment frag
